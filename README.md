@@ -2,6 +2,8 @@
 
 Webカメラ映像から人物だけをリアルタイムで切り抜き（背景は透明）、Syphon で他のアプリ（OBS、Resolume、MadMapper など）へ送る macOS アプリです。
 
+![NoGreenBack の画面（背景の市松模様が透明部分）](docs/images/screenshot.jpg)
+
 - 人物の切り抜き: Apple Vision の人物セグメンテーション（`VNGeneratePersonSegmentationRequest`）
 - 合成: Core Image
 - 送出: Metal テクスチャ → `SyphonMetalServer`（サーバー名 `NoGreenBack`）
