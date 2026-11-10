@@ -26,6 +26,7 @@ final class Settings: @unchecked Sendable {
     private var _smoothing: Double = 0.6
     private var _tighten: Double = 0.3
     private var _hold: Double = 0.6
+    private var _deflicker: Double = 0.7
 
     private func get<T>(_ v: () -> T) -> T { lock.lock(); defer { lock.unlock() }; return v() }
     private func set(_ f: () -> Void) { lock.lock(); f(); lock.unlock() }
@@ -46,6 +47,8 @@ final class Settings: @unchecked Sendable {
     /// 消失の保持 0...1 (0 = なし)。人物と判定された部分が急に消えたとき、すぐ消さずにゆっくりフェードさせる
     /// (手を顔の前にかざしたときなど、判定が一瞬外れても頭が消えないように)
     var hold: Double { get { get { _hold } } set { set { _hold = newValue } } }
+    /// 明るさ安定化 0...1 (0 = なし)。照明のフリッカーによる画面全体の明滅をならす
+    var deflicker: Double { get { get { _deflicker } } set { set { _deflicker = newValue } } }
 }
 
 // MARK: - 映像処理
@@ -65,6 +68,8 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
     private var maskIndex = 0
     private var hasMaskHistory = false
     private var lastQuality: VNGeneratePersonSegmentationRequest.QualityLevel?
+    /// 明るさ安定化用: 平均輝度の移動平均
+    private var lumaAverage: Double?
     private let previewLock = NSLock()
     private var _latestImage: CIImage?
     /// プレビュー用の最新フレーム (切り抜き済み)
@@ -163,6 +168,33 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
         return CIImage(mtlTexture: writeTex, options: raw) ?? result
     }
 
+    /// 明るさ安定化: フレーム全体の平均輝度を求め、ゆっくり追従する移動平均に合わせてゲインをかける。
+    /// 照明の明滅 (例: 50Hz 地域を 30fps で撮ると約 10Hz で脈打つ) を打ち消す。
+    /// ゆっくりした明るさの変化 (自動露出や照明の点灯) にはそのまま追従する。
+    private func deflickered(_ image: CIImage) -> CIImage {
+        let strength = settings.deflicker
+        guard strength > 0.01 else { lumaAverage = nil; return image }
+        let e = image.extent
+        let small = image.transformed(by: CGAffineTransform(scaleX: 0.125, y: 0.125))
+        let avg = small.applyingFilter("CIAreaAverage",
+                                       parameters: [kCIInputExtentKey: CIVector(cgRect: small.extent)])
+        var px = [Float](repeating: 0, count: 4)
+        ciContext.render(avg, toBitmap: &px, rowBytes: 16,
+                         bounds: CGRect(x: 0, y: 0, width: 1, height: 1), format: .RGBAf, colorSpace: nil)
+        let luma = Double(0.299 * px[0] + 0.587 * px[1] + 0.114 * px[2])
+        guard luma > 0.01 else { return image }
+        let ref = (lumaAverage ?? luma) * 0.9 + luma * 0.1   // 約 10 フレームで追従
+        lumaAverage = ref
+        let gain = min(max(ref / luma, 0.8), 1.25)
+        let g = CGFloat(1 + (gain - 1) * strength)
+        guard abs(g - 1) > 0.001 else { return image }
+        return image.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: g, y: 0, z: 0, w: 0),
+            "inputGVector": CIVector(x: 0, y: g, z: 0, w: 0),
+            "inputBVector": CIVector(x: 0, y: 0, z: g, w: 0),
+        ]).cropped(to: e)
+    }
+
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
@@ -180,7 +212,7 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
         guard let maskBuffer = request.results?.first?.pixelBuffer else { return }
 
         // 2) マスクを映像サイズに拡大して合成
-        var source = CIImage(cvPixelBuffer: pixelBuffer)
+        var source = deflickered(CIImage(cvPixelBuffer: pixelBuffer))
         let extent = source.extent
         guard let cb = queue.makeCommandBuffer() else { return }
         var mask = CIImage(cvPixelBuffer: maskBuffer, options: [.colorSpace: NSNull()])
@@ -311,6 +343,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var cameraPopup = NSPopUpButton()
     var fpsLabel = NSTextField(labelWithString: "-- fps")
     var devices: [AVCaptureDevice] = []
+    var currentDevice: AVCaptureDevice?
+    /// 選べるフレームレート。50Hz 地域 (東日本) は 25/20fps、60Hz 地域 (西日本) は 30fps でフリッカーが出にくい
+    let frameRates: [(fps: Int32, title: String)] = [
+        (30, "30fps (60Hz・西日本)"),
+        (25, "25fps (50Hz・東日本)"),
+        (20, "20fps (50Hz・より安定)"),
+    ]
+    var targetFPS: Int32 {
+        get { let v = UserDefaults.standard.integer(forKey: "frameRate"); return v > 0 ? Int32(v) : 25 }
+        set { UserDefaults.standard.set(Int(newValue), forKey: "frameRate") }
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard let mtl = MTLCreateSystemDefaultDevice() else { fatalError("Metal 非対応") }
@@ -337,7 +380,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: UI
 
     func buildUI() {
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 620),
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1120, height: 680),
                           styleMask: [.titled, .closable, .resizable, .miniaturizable],
                           backing: .buffered, defer: false)
         window.title = "NoGreenBack — Syphon: \"NoGreenBack\""
@@ -354,6 +397,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         quality.selectItem(at: 1)
         quality.target = self
         quality.action = #selector(qualityChanged(_:))
+
+        let fpsPopup = NSPopUpButton()
+        fpsPopup.addItems(withTitles: frameRates.map(\.title))
+        fpsPopup.selectItem(at: frameRates.firstIndex { $0.fps == targetFPS } ?? 1)
+        fpsPopup.target = self
+        fpsPopup.action = #selector(fpsChanged(_:))
+        fpsPopup.toolTip = "照明の電源周波数に合わせると、フリッカー (明滅) が出にくくなります"
+
+        let deflicker = NSSlider(value: settings.deflicker, minValue: 0, maxValue: 1,
+                                 target: self, action: #selector(deflickerChanged(_:)))
+        deflicker.widthAnchor.constraint(equalToConstant: 110).isActive = true
+        deflicker.toolTip = "照明のフリッカーによる画面全体の明滅をならします (横じまは消せません)"
 
         let feather = NSSlider(value: settings.feather, minValue: 0, maxValue: 6,
                                target: self, action: #selector(featherChanged(_:)))
@@ -376,6 +431,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let bar = NSStackView(views: [
             NSTextField(labelWithString: "カメラ"), cameraPopup,
             NSTextField(labelWithString: "品質"), quality,
+            NSTextField(labelWithString: "フレームレート"), fpsPopup,
             mirror, flip, straight, NSView(), fpsLabel,
         ])
         let hold = NSSlider(value: settings.hold, minValue: 0, maxValue: 1,
@@ -387,7 +443,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSTextField(labelWithString: "ちらつき抑制"), smoothing,
             NSTextField(labelWithString: "消失の保持"), hold,
             NSTextField(labelWithString: "境界の締まり"), tighten,
-            NSTextField(labelWithString: "境界ぼかし"), feather, NSView(),
+            NSTextField(labelWithString: "境界ぼかし"), feather,
+            NSTextField(labelWithString: "明るさ安定化"), deflicker, NSView(),
         ])
         for b in [bar, bar2] {
             b.orientation = .horizontal
@@ -438,7 +495,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         session.beginConfiguration()
         if session.canAddOutput(output) { session.addOutput(output) }
         session.commitConfiguration()
-        videoQueue.async { self.session.startRunning() }
+        videoQueue.async {
+            self.session.startRunning()
+            // セッション開始時にフレームレートが既定値へ戻ることがあるので、開始後にも設定する
+            DispatchQueue.main.async { self.applyFrameRate() }
+        }
     }
 
     func configure(device: AVCaptureDevice) {
@@ -448,12 +509,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             let input = try AVCaptureDeviceInput(device: device)
             if session.canAddInput(input) { session.addInput(input) }
+            currentDevice = device
             if !session.canSetSessionPreset(.hd1920x1080) { session.sessionPreset = .high }
         } catch {
             showAlert("カメラを開けません: \(error.localizedDescription)")
         }
         session.commitConfiguration()
+        applyFrameRate()
     }
+
+    /// 選んだフレームレートをカメラに設定する (カメラが対応していなければ範囲内に丸める)
+    func applyFrameRate() {
+        guard let device = currentDevice else { return }
+        let ranges = device.activeFormat.videoSupportedFrameRateRanges
+        guard !ranges.isEmpty else { return }
+        let want = Double(targetFPS)
+        let lo = ranges.map(\.minFrameRate).min()!, hi = ranges.map(\.maxFrameRate).max()!
+        let fps = min(max(want, lo), hi)
+        let duration = CMTime(value: 1000, timescale: CMTimeScale(fps * 1000))
+        do {
+            try device.lockForConfiguration()
+            device.activeVideoMinFrameDuration = duration
+            device.activeVideoMaxFrameDuration = duration
+            device.unlockForConfiguration()
+        } catch {
+            NSLog("frame rate error: \(error)")
+        }
+    }
+
+    @objc func fpsChanged(_ sender: NSPopUpButton) {
+        targetFPS = frameRates[sender.indexOfSelectedItem].fps
+        applyFrameRate()
+    }
+    @objc func deflickerChanged(_ sender: NSSlider) { settings.deflicker = sender.doubleValue }
 
     @objc func cameraChanged() {
         let i = cameraPopup.indexOfSelectedItem
