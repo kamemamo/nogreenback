@@ -10,6 +10,7 @@ cd "$(dirname "$0")"
 VENDOR=vendor
 FW_BUILD="$PWD/$VENDOR/build"
 APP=NoGreenBack.app
+VERSION=1.1
 MIN_OS=12.0
 ARCHS=(arm64 x86_64)
 
@@ -54,7 +55,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>NoGreenBack</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundleVersion</key><string>$VERSION</string>
   <key>LSMinimumSystemVersion</key><string>$MIN_OS</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSCameraUsageDescription</key><string>人物を切り抜いて Syphon で送出するためにカメラを使用します。</string>
