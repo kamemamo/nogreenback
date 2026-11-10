@@ -511,6 +511,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let input = try AVCaptureDeviceInput(device: device)
             if session.canAddInput(input) { session.addInput(input) }
             currentDevice = device
+            watchFrameRate(of: device)
             if !session.canSetSessionPreset(.hd1920x1080) { session.sessionPreset = .high }
         } catch {
             showAlert("カメラを開けません: \(error.localizedDescription)")
@@ -519,23 +520,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applyFrameRate()
     }
 
-    /// 選んだフレームレートをカメラに設定する (カメラが対応していなければ範囲内に丸める)
+    /// カメラが対応するフレーム間隔のうち、選んだフレームレートに最も近いものを返す
+    /// (Osmo Pocket などは 30/25/24fps のような飛び飛びの値しか受け付けない)
+    func frameDuration(for device: AVCaptureDevice) -> CMTime? {
+        let ranges = device.activeFormat.videoSupportedFrameRateRanges
+        let want = Double(targetFPS)
+        if let r = ranges.first(where: { $0.minFrameRate <= want && want <= $0.maxFrameRate }) {
+            // 飛び飛びの値ならカメラが示す値そのものを使う
+            return r.minFrameRate == r.maxFrameRate ? r.minFrameDuration : CMTime(value: 1, timescale: targetFPS)
+        }
+        // 範囲外なら最も近い端の値に合わせる
+        let candidates = ranges.flatMap { [($0.minFrameRate, $0.maxFrameDuration), ($0.maxFrameRate, $0.minFrameDuration)] }
+        return candidates.min(by: { abs($0.0 - want) < abs($1.0 - want) })?.1
+    }
+
+    /// 使う映像形式: 横長 1920x1080 (なければ 1920 幅以下で最大の横長)。
+    /// Osmo Pocket など縦横両方を出せるカメラは、指定しないと縦長の枠に横長の映像を入れて送ってくる
+    func preferredFormat(for device: AVCaptureDevice) -> AVCaptureDevice.Format? {
+        let landscape = device.formats.filter {
+            let d = $0.formatDescription.dimensions
+            return d.width > d.height && d.width <= 1920
+        }
+        func score(_ f: AVCaptureDevice.Format) -> (Int32, Bool) {
+            // 解像度が大きいもの優先、同じなら 420v (Vision と相性がよい) を優先
+            (f.formatDescription.dimensions.width,
+             f.formatDescription.mediaSubType == .init(rawValue: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange))
+        }
+        return landscape.max { a, b in
+            let (sa, sb) = (score(a), score(b))
+            return sa.0 != sb.0 ? sa.0 < sb.0 : (!sa.1 && sb.1)
+        }
+    }
+
+    /// 映像形式と選んだフレームレートをカメラに設定する
     func applyFrameRate() {
         guard let device = currentDevice else { return }
-        let ranges = device.activeFormat.videoSupportedFrameRateRanges
-        guard !ranges.isEmpty else { return }
-        let want = Double(targetFPS)
-        let lo = ranges.map(\.minFrameRate).min()!, hi = ranges.map(\.maxFrameRate).max()!
-        let fps = min(max(want, lo), hi)
-        let duration = CMTime(value: 1000, timescale: CMTimeScale(fps * 1000))
         do {
             try device.lockForConfiguration()
-            device.activeVideoMinFrameDuration = duration
-            device.activeVideoMaxFrameDuration = duration
-            device.unlockForConfiguration()
+            defer { device.unlockForConfiguration() }
+            if let f = preferredFormat(for: device), device.activeFormat != f {
+                device.activeFormat = f
+            }
+            if let duration = frameDuration(for: device),
+               device.activeVideoMinFrameDuration != duration || device.activeVideoMaxFrameDuration != duration {
+                device.activeVideoMinFrameDuration = duration
+                device.activeVideoMaxFrameDuration = duration
+            }
         } catch {
-            NSLog("frame rate error: \(error)")
+            NSLog("camera config error: \(error)")
         }
+    }
+
+    /// カメラ側 (UVC カメラなど) が撮影開始時にフレームレートを既定値へ戻すことがあるので、
+    /// 変わったら設定し直す
+    var frameRateObservers: [NSKeyValueObservation] = []
+    func watchFrameRate(of device: AVCaptureDevice) {
+        let reapply: (AVCaptureDevice, Any) -> Void = { [weak self] _, _ in
+            DispatchQueue.main.async { self?.applyFrameRate() }
+        }
+        frameRateObservers = [
+            device.observe(\.activeVideoMinFrameDuration, changeHandler: reapply),
+            device.observe(\.activeVideoMaxFrameDuration, changeHandler: reapply),
+            device.observe(\.activeFormat, changeHandler: reapply),
+        ]
     }
 
     @objc func fpsChanged(_ sender: NSPopUpButton) {
