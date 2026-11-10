@@ -1,4 +1,4 @@
-// NoGreenback — Webカメラから人物だけをリアルタイムで切り抜き、Syphon で送出する macOS アプリ
+// NoGreenBack — Webカメラから人物だけをリアルタイムで切り抜き、Syphon で送出する macOS アプリ
 //
 // パイプライン:
 //   AVCaptureSession (BGRA) → Vision 人物セグメンテーション (マスク)
@@ -84,7 +84,7 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
             .workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
             .cacheIntermediates: false,
         ])
-        self.syphon = SyphonMetalServer(name: "NoGreenback", device: device, options: nil)
+        self.syphon = SyphonMetalServer(name: "NoGreenBack", device: device, options: nil)
         request.outputPixelFormat = kCVPixelFormatType_OneComponent8
         super.init()
     }
@@ -340,7 +340,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 620),
                           styleMask: [.titled, .closable, .resizable, .miniaturizable],
                           backing: .buffered, defer: false)
-        window.title = "NoGreenback — Syphon: \"NoGreenback\""
+        window.title = "NoGreenBack — Syphon: \"NoGreenBack\""
         window.center()
 
         let preview = PreviewView(frame: .zero, device: processor.device)
@@ -483,7 +483,7 @@ let mainMenu = NSMenu()
 let appItem = NSMenuItem()
 mainMenu.addItem(appItem)
 let appMenu = NSMenu()
-appMenu.addItem(withTitle: "NoGreenback を終了", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+appMenu.addItem(withTitle: "NoGreenBack を終了", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 appItem.submenu = appMenu
 app.mainMenu = mainMenu
 

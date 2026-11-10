@@ -21,7 +21,7 @@
       <circle cx="512" cy="410" r="138"/>
       <path d="M232 960 C232 700 360 600 512 600 C664 600 792 700 792 960 Z"/>
     </g>
-    <text x="512" y="842" font-family="SF Pro Rounded, SF Pro Display, -apple-system, Helvetica Neue, sans-serif" font-weight="800" text-anchor="middle" font-size="92" fill="#ffffff" letter-spacing="-1" style="paint-order:stroke" stroke="#c22a55" stroke-opacity="0.25" stroke-width="6">NoGreenback</text>
+    <text x="512" y="842" font-family="SF Pro Rounded, SF Pro Display, -apple-system, Helvetica Neue, sans-serif" font-weight="800" text-anchor="middle" font-size="92" fill="#ffffff" letter-spacing="-1" style="paint-order:stroke" stroke="#c22a55" stroke-opacity="0.25" stroke-width="6">NoGreenBack</text>
   </g>
   <rect x="100" y="100" width="824" height="824" rx="185" fill="none" stroke="#000" stroke-opacity="0.08" stroke-width="4"/>
 </svg>

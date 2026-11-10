@@ -1,4 +1,4 @@
-// Syphon サーバー一覧を表示し、NoGreenback から 1 フレーム受信して PNG に保存する確認ツール
+// Syphon サーバー一覧を表示し、NoGreenBack から 1 フレーム受信して PNG に保存する確認ツール
 // 使い方: syphon-check [出力PNGパス]
 import AppKit
 import CoreImage
@@ -15,8 +15,8 @@ print("Syphon servers:")
 for s in servers {
     print("  -", s[SyphonServerDescriptionAppNameKey] ?? "?", "/", s[SyphonServerDescriptionNameKey] ?? "?")
 }
-guard let desc = servers.first(where: { ($0[SyphonServerDescriptionNameKey] as? String) == "NoGreenback" }) else {
-    print("NoGreenback サーバーが見つかりません"); exit(1)
+guard let desc = servers.first(where: { ($0[SyphonServerDescriptionNameKey] as? String) == "NoGreenBack" }) else {
+    print("NoGreenBack サーバーが見つかりません"); exit(1)
 }
 
 let client = SyphonMetalClient(serverDescription: desc, device: device, options: nil, newFrameHandler: nil)

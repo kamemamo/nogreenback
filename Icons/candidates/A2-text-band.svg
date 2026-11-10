@@ -22,7 +22,7 @@
       <path d="M262 960 C262 720 372 536 512 536 C652 536 762 720 762 960 Z"/>
     </g>
     <rect x="100" y="742" width="824" height="182" fill="#1c1d22"/>
-    <text x="512" y="866" font-family="SF Pro Rounded, SF Pro Display, -apple-system, Helvetica Neue, sans-serif" font-weight="800" text-anchor="middle" font-size="96" fill="#ffffff" letter-spacing="-1">NoGreenback</text>
+    <text x="512" y="866" font-family="SF Pro Rounded, SF Pro Display, -apple-system, Helvetica Neue, sans-serif" font-weight="800" text-anchor="middle" font-size="96" fill="#ffffff" letter-spacing="-1">NoGreenBack</text>
   </g>
   <rect x="100" y="100" width="824" height="824" rx="185" fill="none" stroke="#000" stroke-opacity="0.08" stroke-width="4"/>
 </svg>

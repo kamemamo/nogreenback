@@ -1,7 +1,7 @@
 #!/bin/zsh
-# NoGreenback をビルドして NoGreenback.app を作る
+# NoGreenBack をビルドして NoGreenBack.app を作る
 #   ./build.sh         … ビルドのみ
-#   ./build.sh --zip   … ビルドして dist/NoGreenback.zip (他の Mac 配布用) も作る
+#   ./build.sh --zip   … ビルドして dist/NoGreenBack.zip (他の Mac 配布用) も作る
 #
 # Apple Silicon / Intel 両対応のユニバーサルバイナリ、macOS 12 以降で動作
 set -euo pipefail
@@ -9,7 +9,7 @@ cd "$(dirname "$0")"
 
 VENDOR=vendor
 FW_BUILD="$PWD/$VENDOR/build"
-APP=NoGreenback.app
+APP=NoGreenBack.app
 MIN_OS=12.0
 ARCHS=(arm64 x86_64)
 
@@ -28,7 +28,7 @@ if [[ ! -f "$FW_BIN" ]] || [[ "$(lipo -archs "$FW_BIN" | tr ' ' '\n' | sort | xa
 fi
 
 # 2) アプリ本体 (アーキテクチャごとにビルドして lipo で結合)
-echo "==> NoGreenback をビルド (${ARCHS[*]})"
+echo "==> NoGreenBack をビルド (${ARCHS[*]})"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/Resources" "$VENDOR/obj"
 bins=()
@@ -37,10 +37,10 @@ for arch in ${ARCHS[@]}; do
     -F "$FW_BUILD" -framework Syphon \
     -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
     -target $arch-apple-macos$MIN_OS \
-    Sources/*.swift -o "$VENDOR/obj/NoGreenback-$arch"
-  bins+="$VENDOR/obj/NoGreenback-$arch"
+    Sources/*.swift -o "$VENDOR/obj/NoGreenBack-$arch"
+  bins+="$VENDOR/obj/NoGreenBack-$arch"
 done
-lipo -create ${bins[@]} -output "$APP/Contents/MacOS/NoGreenback"
+lipo -create ${bins[@]} -output "$APP/Contents/MacOS/NoGreenBack"
 
 cp -R "$FW_BUILD/Syphon.framework" "$APP/Contents/Frameworks/"
 # アイコン (Icons/AppIcon.svg を変えたら: swiftc Tools/render-icon.swift -o vendor/render-icon && vendor/render-icon Icons/AppIcon.svg Icons/AppIcon.icns)
@@ -49,9 +49,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>CFBundleName</key><string>NoGreenback</string>
+  <key>CFBundleName</key><string>NoGreenBack</string>
   <key>CFBundleIdentifier</key><string>local.nogreenback</string>
-  <key>CFBundleExecutable</key><string>NoGreenback</string>
+  <key>CFBundleExecutable</key><string>NoGreenBack</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleShortVersionString</key><string>1.0</string>
@@ -65,12 +65,12 @@ PLIST
 codesign --force --sign - "$APP/Contents/Frameworks/Syphon.framework"
 codesign --force --sign - "$APP"
 codesign --verify --deep --strict "$APP"
-echo "==> 完成: $PWD/$APP  ($(lipo -archs "$APP/Contents/MacOS/NoGreenback"))"
+echo "==> 完成: $PWD/$APP  ($(lipo -archs "$APP/Contents/MacOS/NoGreenBack"))"
 
 # 3) 配布用 zip
 if [[ "${1:-}" == "--zip" ]]; then
   mkdir -p dist
-  rm -f dist/NoGreenback.zip
-  ditto -c -k --sequesterRsrc --keepParent "$APP" dist/NoGreenback.zip
-  echo "==> 配布用: $PWD/dist/NoGreenback.zip"
+  rm -f dist/NoGreenBack.zip
+  ditto -c -k --sequesterRsrc --keepParent "$APP" dist/NoGreenBack.zip
+  echo "==> 配布用: $PWD/dist/NoGreenBack.zip"
 fi
