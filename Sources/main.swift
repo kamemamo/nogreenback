@@ -415,8 +415,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: カメラ
 
     func refreshCameras() {
-        var types: [AVCaptureDevice.DeviceType] = [.builtInWideAngleCamera, .external]
-        if #available(macOS 14.0, *) { types.append(.continuityCamera) }
+        var types: [AVCaptureDevice.DeviceType] = [.builtInWideAngleCamera]
+        if #available(macOS 14.0, *) {
+            types += [.external, .continuityCamera]
+        } else {
+            types.append(.externalUnknown)
+        }
         devices = AVCaptureDevice.DiscoverySession(deviceTypes: types, mediaType: .video,
                                                    position: .unspecified).devices
         cameraPopup.removeAllItems()

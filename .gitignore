@@ -1,3 +1,4 @@
 vendor/
 NoGreenback.app/
 .DS_Store
+dist/

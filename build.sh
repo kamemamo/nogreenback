@@ -1,37 +1,49 @@
 #!/bin/zsh
 # NoGreenback をビルドして NoGreenback.app を作る
+#   ./build.sh         … ビルドのみ
+#   ./build.sh --zip   … ビルドして dist/NoGreenback.zip (他の Mac 配布用) も作る
+#
+# Apple Silicon / Intel 両対応のユニバーサルバイナリ、macOS 12 以降で動作
 set -euo pipefail
 cd "$(dirname "$0")"
 
 VENDOR=vendor
 FW_BUILD="$PWD/$VENDOR/build"
 APP=NoGreenback.app
+MIN_OS=12.0
+ARCHS=(arm64 x86_64)
 
-# 1) Syphon.framework (初回のみ)
+# 1) Syphon.framework (初回、またはユニバーサルでない場合のみ)
 if [[ ! -d "$VENDOR/Syphon-Framework" ]]; then
   git clone --depth 1 https://github.com/Syphon/Syphon-Framework.git "$VENDOR/Syphon-Framework"
 fi
-if [[ ! -f "$FW_BUILD/Syphon.framework/Versions/A/Syphon" ]]; then
+FW_BIN="$FW_BUILD/Syphon.framework/Versions/A/Syphon"
+if [[ ! -f "$FW_BIN" ]] || ! lipo "$FW_BIN" -verify_arch ${ARCHS[@]} 2>/dev/null; then
   rm -rf "$FW_BUILD"
-  echo "==> Syphon.framework をビルド"
+  echo "==> Syphon.framework をビルド (${ARCHS[*]})"
   xcodebuild -project "$VENDOR/Syphon-Framework/Syphon.xcodeproj" -scheme Syphon \
     -configuration Release -destination 'generic/platform=macOS' \
-    ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CONFIGURATION_BUILD_DIR="$FW_BUILD" \
-    CODE_SIGN_IDENTITY="-" build -quiet
+    ARCHS="${ARCHS[*]}" ONLY_ACTIVE_ARCH=NO MACOSX_DEPLOYMENT_TARGET=$MIN_OS \
+    CONFIGURATION_BUILD_DIR="$FW_BUILD" CODE_SIGN_IDENTITY="-" build -quiet
 fi
 
-# 2) アプリ本体
-echo "==> NoGreenback をビルド"
+# 2) アプリ本体 (アーキテクチャごとにビルドして lipo で結合)
+echo "==> NoGreenback をビルド (${ARCHS[*]})"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks"
-swiftc -O -swift-version 5 \
-  -F "$FW_BUILD" -framework Syphon \
-  -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
-  -target arm64-apple-macos14.0 \
-  Sources/*.swift -o "$APP/Contents/MacOS/NoGreenback"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$VENDOR/obj"
+bins=()
+for arch in ${ARCHS[@]}; do
+  swiftc -O -swift-version 5 \
+    -F "$FW_BUILD" -framework Syphon \
+    -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
+    -target $arch-apple-macos$MIN_OS \
+    Sources/*.swift -o "$VENDOR/obj/NoGreenback-$arch"
+  bins+="$VENDOR/obj/NoGreenback-$arch"
+done
+lipo -create ${bins[@]} -output "$APP/Contents/MacOS/NoGreenback"
 
 cp -R "$FW_BUILD/Syphon.framework" "$APP/Contents/Frameworks/"
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -40,11 +52,22 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleExecutable</key><string>NoGreenback</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>1.0</string>
-  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>LSMinimumSystemVersion</key><string>$MIN_OS</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSCameraUsageDescription</key><string>人物を切り抜いて Syphon で送出するためにカメラを使用します。</string>
 </dict></plist>
 PLIST
 
-codesign --force --deep --sign - "$APP"
-echo "==> 完成: $PWD/$APP   (起動: open $APP)"
+# アドホック署名 (Developer ID 証明書がないため。他の Mac では初回起動時に許可が必要)
+codesign --force --sign - "$APP/Contents/Frameworks/Syphon.framework"
+codesign --force --sign - "$APP"
+codesign --verify --deep --strict "$APP"
+echo "==> 完成: $PWD/$APP  ($(lipo -archs "$APP/Contents/MacOS/NoGreenback"))"
+
+# 3) 配布用 zip
+if [[ "${1:-}" == "--zip" ]]; then
+  mkdir -p dist
+  rm -f dist/NoGreenback.zip
+  ditto -c -k --sequesterRsrc --keepParent "$APP" dist/NoGreenback.zip
+  echo "==> 配布用: $PWD/dist/NoGreenback.zip"
+fi

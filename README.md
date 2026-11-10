@@ -17,6 +17,27 @@ open NoGreenback.app
 
 `build.sh` は初回に Syphon-Framework を `vendor/` へ clone してビルドし、`NoGreenback.app` を作ります。
 
+## 他の Mac で使う
+
+Apple Silicon / Intel 両対応、macOS 12 以降で動きます。他の Mac には Xcode は不要です。
+
+1. この Mac で配布用 zip を作ります。
+
+   ```bash
+   ./build.sh --zip
+   ```
+
+2. `dist/NoGreenback.zip` を AirDrop や USB などで他の Mac にコピーして展開し、`NoGreenback.app` を「アプリケーション」フォルダに入れます。
+3. 初回だけ起動の許可が必要です（Apple の公証を受けていないため）。次のどちらかで許可します。
+   - ターミナルで次を実行してから、普通に開く
+
+     ```bash
+     xattr -dr com.apple.quarantine /Applications/NoGreenback.app
+     ```
+
+   - 一度開こうとしてブロックされたあと、「システム設定 > プライバシーとセキュリティ」の下の方にある「このまま開く」を押す
+4. 起動したらカメラへのアクセスを許可します。
+
 ## OBS での受信
 
 ソースに「Syphon クライアント」を追加し、プロパティで `NoGreenback` を選んで **「透過を許可」にチェック**を入れます（入れないと背景が黒になります）。
