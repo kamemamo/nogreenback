@@ -18,7 +18,7 @@ if [[ ! -d "$VENDOR/Syphon-Framework" ]]; then
   git clone --depth 1 https://github.com/Syphon/Syphon-Framework.git "$VENDOR/Syphon-Framework"
 fi
 FW_BIN="$FW_BUILD/Syphon.framework/Versions/A/Syphon"
-if [[ ! -f "$FW_BIN" ]] || ! lipo "$FW_BIN" -verify_arch ${ARCHS[@]} 2>/dev/null; then
+if [[ ! -f "$FW_BIN" ]] || [[ "$(lipo -archs "$FW_BIN" | tr ' ' '\n' | sort | xargs)" != "$(print -l ${ARCHS[@]} | sort | xargs)" ]]; then
   rm -rf "$FW_BUILD"
   echo "==> Syphon.framework をビルド (${ARCHS[*]})"
   xcodebuild -project "$VENDOR/Syphon-Framework/Syphon.xcodeproj" -scheme Syphon \
@@ -30,7 +30,7 @@ fi
 # 2) アプリ本体 (アーキテクチャごとにビルドして lipo で結合)
 echo "==> NoGreenback をビルド (${ARCHS[*]})"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$VENDOR/obj"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/Resources" "$VENDOR/obj"
 bins=()
 for arch in ${ARCHS[@]}; do
   swiftc -O -swift-version 5 \
@@ -43,6 +43,8 @@ done
 lipo -create ${bins[@]} -output "$APP/Contents/MacOS/NoGreenback"
 
 cp -R "$FW_BUILD/Syphon.framework" "$APP/Contents/Frameworks/"
+# アイコン (Icons/AppIcon.svg を変えたら: swiftc Tools/render-icon.swift -o vendor/render-icon && vendor/render-icon Icons/AppIcon.svg Icons/AppIcon.icns)
+cp Icons/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -51,6 +53,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIdentifier</key><string>local.nogreenback</string>
   <key>CFBundleExecutable</key><string>NoGreenback</string>
   <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleShortVersionString</key><string>1.0</string>
   <key>LSMinimumSystemVersion</key><string>$MIN_OS</string>
   <key>NSHighResolutionCapable</key><true/>

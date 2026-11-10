@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- 案B: 「グリーンバック不要」— 斜線で打ち消した緑の幕の前に立つ人物 -->
+  <defs>
+    <clipPath id="sq"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1d2433"/>
+      <stop offset="1" stop-color="#0d1119"/>
+    </linearGradient>
+    <linearGradient id="green" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3ee07a"/>
+      <stop offset="1" stop-color="#14a84a"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+  <g clip-path="url(#sq)">
+    <rect x="100" y="100" width="824" height="824" fill="url(#bg)"/>
+    <!-- 緑の幕 -->
+    <rect x="232" y="196" width="560" height="520" rx="48" fill="url(#green)"/>
+    <!-- 打ち消し線 -->
+    <line x1="262" y1="226" x2="762" y2="686" stroke="#ff4d4d" stroke-width="44" stroke-linecap="round"/>
+    <!-- 人物 (白) -->
+    <g filter="url(#shadow)" fill="#ffffff">
+      <circle cx="512" cy="486" r="118"/>
+      <path d="M272 960 C272 740 382 660 512 660 C642 660 752 740 752 960 Z"/>
+    </g>
+  </g>
+</svg>
