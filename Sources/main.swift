@@ -21,7 +21,7 @@ final class Settings: @unchecked Sendable {
     private var _quality: VNGeneratePersonSegmentationRequest.QualityLevel = .balanced
     private var _feather: Double = 1.5
     private var _mirror = false
-    private var _flipVertical = false
+    private var _flipVertical = true   // 既定で上下反転オン
     private var _straightAlpha = false
     private var _smoothing: Double = 0.6
     private var _tighten: Double = 0.3
@@ -416,6 +416,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let mirror = NSButton(checkboxWithTitle: "左右反転", target: self, action: #selector(mirrorChanged(_:)))
         let flip = NSButton(checkboxWithTitle: "上下反転", target: self, action: #selector(flipChanged(_:)))
+        flip.state = settings.flipVertical ? .on : .off
         let straight = NSButton(checkboxWithTitle: "ストレートα", target: self, action: #selector(alphaChanged(_:)))
         straight.toolTip = "オフ: プリマルチプライドα (既定) / オン: ストレートα。受信側で縁が黒くなる・白くなる場合に切り替え"
 
