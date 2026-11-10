@@ -3,7 +3,7 @@
 #   ./build.sh         … ビルドのみ
 #   ./build.sh --zip   … ビルドして dist/NoGreenBack.zip (他の Mac 配布用) も作る
 #
-# Apple Silicon / Intel 両対応のユニバーサルバイナリ、macOS 12 以降で動作
+# Apple Silicon 専用、macOS 12 以降で動作 (Intel も必要なら ARCHS に x86_64 を足す)
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -12,7 +12,7 @@ FW_BUILD="$PWD/$VENDOR/build"
 APP=NoGreenBack.app
 VERSION=1.1
 MIN_OS=12.0
-ARCHS=(arm64 x86_64)
+ARCHS=(arm64)
 
 # 1) Syphon.framework (初回、またはユニバーサルでない場合のみ)
 if [[ ! -d "$VENDOR/Syphon-Framework" ]]; then

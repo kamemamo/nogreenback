@@ -27,7 +27,7 @@
 ・Apple の人物認識（Vision）で、背景を自動で透明にします
 ・Syphon で送るので、OBS、Resolume、MadMapper などに重ねるだけで使えます
 ・輪郭のちらつきを抑える機能と、手を顔の前に出しても体が消えにくくする機能を付けました
-・Apple Silicon と Intel の両方の Mac で、macOS 12 以降で動きます
+・Apple Silicon の Mac（macOS 12 以降）で動きます
 
 これで、Millumin を使わなくても、OBS だけで自分をスライドに重ねた授業ができます。
 

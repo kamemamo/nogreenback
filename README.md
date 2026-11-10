@@ -19,7 +19,7 @@ open NoGreenBack.app
 
 ## 他の Mac で使う
 
-Apple Silicon / Intel 両対応、macOS 12 以降で動きます。他の Mac には Xcode は不要です。
+Apple Silicon の Mac（macOS 12 以降）で動きます。Intel Mac にも対応させたい場合は、`build.sh` の `ARCHS` に `x86_64` を足してビルドし直します。他の Mac には Xcode は不要です。
 
 1. この Mac で配布用 zip を作ります。
 
