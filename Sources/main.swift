@@ -786,7 +786,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                           styleMask: [.titled, .closable, .resizable, .miniaturizable],
                           backing: .buffered, defer: false)
         window.title = "NoGreenBack — Syphon: \"NoGreenBack\""
-        window.center()
+        // メニューバーのある画面 (主ディスプレイ) の中央に出す。
+        // center() だと、液晶タブレットなど別の画面に出ることがある
+        let home = (NSScreen.screens.first ?? NSScreen.main)?.visibleFrame ?? .zero
+        let size = window.frame.size
+        window.setFrameOrigin(NSPoint(x: home.midX - size.width / 2, y: home.midY - size.height / 2))
 
         let preview = PreviewView(frame: .zero, device: processor.device)
         preview.setup(processor: processor)
@@ -1138,7 +1142,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: 画面に重ねる表示
 
     var overlayScreen: NSScreen {
-        NSScreen.screens.first { $0.localizedName == overlayScreenName } ?? NSScreen.main ?? NSScreen.screens[0]
+        // 未設定なら主ディスプレイ (NSScreen.main は操作中の画面で変わるので使わない)
+        NSScreen.screens.first { $0.localizedName == overlayScreenName } ?? NSScreen.screens[0]
     }
 
     /// 録画する画面 (未設定、またはその画面が外れていたら「表示する画面」)
@@ -1172,7 +1177,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 全画面出力の画面 (未設定なら、メイン以外の画面があればそちら = プロジェクターなど)
     var outputScreen: NSScreen {
         NSScreen.screens.first { $0.localizedName == outputScreenName }
-            ?? NSScreen.screens.first { $0 != NSScreen.main } ?? NSScreen.main ?? NSScreen.screens[0]
+            ?? NSScreen.screens.dropFirst().first ?? NSScreen.screens[0]
     }
 
     func refreshBackgrounds() {
@@ -1338,7 +1343,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard #available(macOS 12.3, *) else { return }
         recordButton.isEnabled = false
         if let rec = recorder as? ScreenRecorder {
-            // 停止
+            // 停止 (MP4 への詰め替えが終わるまで「保存中」と出す)
+            recordTimer?.invalidate()
+            recordLabel.stringValue = "保存中…"
             Task { @MainActor in
                 let url = await rec.stop()
                 self.recorder = nil

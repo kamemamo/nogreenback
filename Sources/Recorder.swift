@@ -1,4 +1,8 @@
-// 画面録画: ScreenCaptureKit で画面を受け取り、AVAssetWriter で H.264 の .mov に書き出す
+// 画面録画: ScreenCaptureKit で画面を受け取り、AVAssetWriter で H.264 に圧縮して保存する
+// OBS の「Hybrid MP4」と同じ考え方で、落ちても消えず、止めたら普通の MP4 になるようにする:
+//   録画中 … 2 秒ごとに区切って .mov に書き込む (アプリが落ちても、それまでの分は再生できる)
+//   停止時 … 再圧縮せずに .mp4 へ詰め替えて、.mov を消す
+// (AVAssetWriter は .mp4 だと区切りの書き込みが途中で止まるため、録画中は .mov を使う)
 // 圧縮は Apple Silicon のメディアエンジン (専用回路) が行うので、CPU の負担は小さい。
 // 画面に重ねた人物と手書きの注釈もそのまま録画される (NoGreenBack の操作ウィンドウだけは除く)
 
@@ -60,6 +64,8 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
         stamp.dateFormat = "yyyy-MM-dd HH.mm.ss"
         let url = movies.appendingPathComponent("NoGreenBack \(stamp.string(from: Date())).mov")
         let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+        // 2 秒ごとにフラグメントを書き出す (途中で止まっても最大 2 秒分しか失わない)
+        writer.movieFragmentInterval = CMTime(seconds: 2, preferredTimescale: 600)
 
         let video = AVAssetWriterInput(mediaType: .video, outputSettings: [
             AVVideoCodecKey: AVVideoCodecType.h264,
@@ -132,6 +138,9 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
         guard let writer else { return nil }
         if started {
             await writer.finishWriting()
+            if writer.status == .completed, let mov = url, let mp4 = await Self.remuxToMP4(mov) {
+                self.url = mp4
+            }
         } else {
             // 1 フレームも届かなかった (画面に変化がなかった等) 場合は空ファイルを消す
             writer.cancelWriting()
@@ -142,6 +151,24 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
         videoInput = nil
         audioInput = nil
         return url
+    }
+
+    /// .mov を再圧縮せずに .mp4 へ詰め替える。成功したら .mov を消して .mp4 の場所を返す
+    /// (失敗したときは .mov をそのまま残す)
+    static func remuxToMP4(_ mov: URL) async -> URL? {
+        let mp4 = mov.deletingPathExtension().appendingPathExtension("mp4")
+        let asset = AVURLAsset(url: mov)
+        guard let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else { return nil }
+        export.outputURL = mp4
+        export.outputFileType = .mp4
+        export.shouldOptimizeForNetworkUse = true   // 先頭に目次を置く (読み込みが速い)
+        await export.export()
+        guard export.status == .completed else {
+            try? FileManager.default.removeItem(at: mp4)
+            return nil
+        }
+        try? FileManager.default.removeItem(at: mov)
+        return mp4
     }
 
     // MARK: 画面のフレーム
