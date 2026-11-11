@@ -688,6 +688,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         get { UserDefaults.standard.string(forKey: "backgroundID") }
         set { UserDefaults.standard.set(newValue, forKey: "backgroundID") }
     }
+    var recordScreenPopup = NSPopUpButton()
+    /// 録画する画面の名前 (nil なら「表示する画面」と同じ)
+    var recordScreenName: String? {
+        get { UserDefaults.standard.string(forKey: "recordScreen") }
+        set { UserDefaults.standard.set(newValue, forKey: "recordScreen") }
+    }
     var outputScreenName: String? {
         get { UserDefaults.standard.string(forKey: "outputScreen") }
         set { UserDefaults.standard.set(newValue, forKey: "outputScreen") }
@@ -872,7 +878,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.refreshScreens(); self?.placeOverlay(); self?.placeOutput()
         }
         recordButton = NSButton(title: "● 録画開始", target: self, action: #selector(recordToggled))
-        recordButton.toolTip = "「表示する画面」を録画して、ムービーフォルダに保存します (このウィンドウは映りません)。⌃⌥⌘R でも開始・停止できます"
+        recordButton.toolTip = "「録画する画面」を録画して、ムービーフォルダに保存します (このウィンドウは映りません)。⌃⌥⌘R でも開始・停止できます"
         micPopup.target = self
         micPopup.action = #selector(micChanged(_:))
         micPopup.toolTip = "録画に入れるマイクの音声"
@@ -972,7 +978,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let outputHint = NSTextField(labelWithString: "Esc か \(HotKeys.modifierSymbols)F で閉じる")
         outputHint.textColor = .secondaryLabelColor
         outputHint.font = .systemFont(ofSize: 11)
+        recordScreenPopup.target = self
+        recordScreenPopup.action = #selector(recordScreenChanged(_:))
+        recordScreenPopup.toolTip = "「● 録画開始」で録画する画面"
         let bar5 = NSStackView(views: [
+            NSTextField(labelWithString: "録画する画面"), recordScreenPopup,
             NSTextField(labelWithString: "背景映像"), bgPopup,
             outputCheck, NSTextField(labelWithString: "出す画面"), outputScreenPopup, outputHint, NSView(),
         ])
@@ -1131,6 +1141,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSScreen.screens.first { $0.localizedName == overlayScreenName } ?? NSScreen.main ?? NSScreen.screens[0]
     }
 
+    /// 録画する画面 (未設定、またはその画面が外れていたら「表示する画面」)
+    var recordScreen: NSScreen {
+        NSScreen.screens.first { $0.localizedName == recordScreenName } ?? overlayScreen
+    }
+
+    @objc func recordScreenChanged(_ sender: NSPopUpButton) {
+        recordScreenName = sender.indexOfSelectedItem > 0 ? sender.titleOfSelectedItem : nil
+    }
+
     func refreshScreens() {
         screenPopup.removeAllItems()
         screenPopup.addItems(withTitles: NSScreen.screens.map(\.localizedName))
@@ -1138,6 +1157,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         outputScreenPopup.removeAllItems()
         outputScreenPopup.addItems(withTitles: NSScreen.screens.map(\.localizedName))
         outputScreenPopup.selectItem(withTitle: outputScreen.localizedName)
+        recordScreenPopup.removeAllItems()
+        recordScreenPopup.addItem(withTitle: "表示する画面と同じ")
+        recordScreenPopup.addItems(withTitles: NSScreen.screens.map(\.localizedName))
+        if let name = recordScreenName, NSScreen.screens.contains(where: { $0.localizedName == name }) {
+            recordScreenPopup.selectItem(withTitle: name)
+        } else {
+            recordScreenPopup.selectItem(at: 0)
+        }
     }
 
     // MARK: 背景映像と全画面出力
@@ -1331,7 +1358,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             Task { @MainActor in
                 do {
-                    _ = try await rec.start(screen: self.overlayScreen,
+                    _ = try await rec.start(screen: self.recordScreen,
                                             excluding: [self.window.windowNumber],
                                             microphone: self.selectedMic)
                     self.recorder = rec

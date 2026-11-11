@@ -39,9 +39,12 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
         let filter = SCContentFilter(display: display, excludingWindows: excluded)
 
         // 縦横比を保って長辺を maxWidth 以下に (エンコーダのため偶数にそろえる)
-        let scale = min(1, Double(Self.maxWidth) / Double(display.width))
-        let width = Int(Double(display.width) * scale) / 2 * 2
-        let height = Int(Double(display.height) * scale) / 2 * 2
+        // display.width はポイント単位なので、Retina や HiDPI の画面では実際の画素数に直す
+        let pixelScale = screen.backingScaleFactor
+        let pixelWidth = Double(display.width) * pixelScale, pixelHeight = Double(display.height) * pixelScale
+        let scale = min(1, Double(Self.maxWidth) / pixelWidth)
+        let width = Int(pixelWidth * scale) / 2 * 2
+        let height = Int(pixelHeight * scale) / 2 * 2
 
         let config = SCStreamConfiguration()
         config.width = width
