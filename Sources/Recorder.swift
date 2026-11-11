@@ -27,8 +27,8 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
     /// - Parameters:
     ///   - screen: 録画する画面
     ///   - excluding: 録画に映さないウィンドウ (操作ウィンドウ) の番号
-    ///   - microphone: マイクの音声も録る
-    func start(screen: NSScreen, excluding windowNumbers: [Int], microphone: Bool) async throws -> URL {
+    ///   - microphone: 音声を録るマイク (nil なら音声なし)
+    func start(screen: NSScreen, excluding windowNumbers: [Int], microphone: AVCaptureDevice?) async throws -> URL {
         // 画面収録の許可がない場合、ここで macOS が許可を求める (または失敗する)
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         let displayID = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
@@ -72,11 +72,11 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
         writer.add(video)
 
         var audioSession: AVCaptureSession?
-        if microphone {
+        if let mic = microphone {
             guard await AVCaptureDevice.requestAccess(for: .audio) else {
                 throw RecorderError.message("マイクへのアクセスが許可されていません。\nシステム設定 > プライバシーとセキュリティ > マイク で許可してください。")
             }
-            if let mic = AVCaptureDevice.default(for: .audio) {
+            do {
                 let audio = AVAssetWriterInput(mediaType: .audio, outputSettings: [
                     AVFormatIDKey: kAudioFormatMPEG4AAC,
                     AVNumberOfChannelsKey: 1,

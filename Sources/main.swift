@@ -26,7 +26,7 @@ final class Settings: @unchecked Sendable {
     private var _straightAlpha = false
     private var _smoothing: Double = 0.6
     private var _tighten: Double = 0.3
-    private var _hold: Double = 0.6
+    private var _hold: Double = 0.2
     private var _deflicker: Double = 0.7
 
     private func get<T>(_ v: () -> T) -> T { lock.lock(); defer { lock.unlock() }; return v() }
@@ -152,7 +152,7 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
         // 増える方向 (人物が現れる) は即座に反映し、減る方向だけゆっくりにする
         let hold = settings.hold
         if hasMaskHistory, hold > 0.01, let prev = CIImage(mtlTexture: readTex, options: raw) {
-            let d = CGFloat(pow(0.02, hold))   // hold 0.6 → 約 0.1/フレーム (30fps で約 0.3 秒)
+            let d = CGFloat(pow(0.02, hold))   // hold 0.6 → 約 0.1/フレーム (30fps で約 0.3 秒)、既定の 0.2 → 約 0.46/フレーム (約 0.07 秒)
             let decayed = prev.applyingFilter("CIColorMatrix", parameters: [
                 "inputBiasVector": CIVector(x: -d, y: -d, z: -d, w: 0),
             ]).applyingFilter("CIColorClamp")
@@ -596,6 +596,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         get { UserDefaults.standard.object(forKey: "recordMic") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "recordMic") }
     }
+    /// 録画に使うマイクの uniqueID (nil ならシステムの既定のマイク)
+    var recordMicID: String? {
+        get { UserDefaults.standard.string(forKey: "recordMicID") }
+        set { UserDefaults.standard.set(newValue, forKey: "recordMicID") }
+    }
+    var micPopup = NSPopUpButton()
+    let micMeter = MicMeter()
+    let micLevel = NSLevelIndicator()
+    var micLevelTimer: Timer?
+    var micDevices: [AVCaptureDevice] = []
 
     // 手書きの注釈の設定
     var annotation: AnnotationWindow!
@@ -773,8 +783,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         recordButton = NSButton(title: "● 録画開始", target: self, action: #selector(recordToggled))
         recordButton.toolTip = "「表示する画面」を録画して、ムービーフォルダに保存します (このウィンドウは映りません)。⌃⌥⌘R でも開始・停止できます"
-        let micCheck = NSButton(checkboxWithTitle: "マイク音声", target: self, action: #selector(micToggled(_:)))
-        micCheck.state = recordMic ? .on : .off
+        micPopup.target = self
+        micPopup.action = #selector(micChanged(_:))
+        micPopup.toolTip = "録画に入れるマイクの音声"
+        // マイクの入力レベル (緑 → 黄 → 赤)。-60dB〜0dB を 0〜30 目盛りで表示
+        micLevel.levelIndicatorStyle = .continuousCapacity
+        micLevel.minValue = 0
+        micLevel.maxValue = 30
+        micLevel.warningValue = 24     // -12dB
+        micLevel.criticalValue = 28    // -4dB
+        micLevel.widthAnchor.constraint(equalToConstant: 70).isActive = true
+        micLevel.toolTip = "マイクの入力レベル。話したときに緑〜黄色まで振れればちょうどよい音量です"
+        let lt = Timer(timeInterval: 1.0 / 15, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let db = Double(self.micMeter.level)
+            // 減るときはゆっくり落とす (針がちらつかないように)
+            let v = max(0, min(30, (db + 60) / 2))
+            self.micLevel.doubleValue = v >= self.micLevel.doubleValue ? v : max(v, self.micLevel.doubleValue - 1.5)
+        }
+        RunLoop.main.add(lt, forMode: .common)
+        micLevelTimer = lt
+        refreshMics()
+        for name in [AVCaptureDevice.wasConnectedNotification, AVCaptureDevice.wasDisconnectedNotification] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                self?.refreshMics()
+            }
+        }
         recordLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         recordLabel.textColor = .systemRed
         if #unavailable(macOS 12.3) {
@@ -786,7 +820,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSTextField(labelWithString: "位置"), cornerPopup,
             NSTextField(labelWithString: "大きさ"), sizeSlider,
             NSTextField(labelWithString: "表示する画面"), screenPopup, NSView(),
-            recordButton, micCheck, recordLabel,
+            recordButton, NSTextField(labelWithString: "マイク"), micPopup, micLevel, recordLabel,
         ])
         bar3.orientation = .horizontal
         bar3.spacing = 8
@@ -1042,7 +1076,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: 画面録画
 
-    @objc func micToggled(_ sender: NSButton) { recordMic = sender.state == .on }
+    func refreshMics() {
+        let types: [AVCaptureDevice.DeviceType]
+        if #available(macOS 14.0, *) { types = [.microphone, .external] }
+        else { types = [.builtInMicrophone, .externalUnknown] }
+        micDevices = AVCaptureDevice.DiscoverySession(deviceTypes: types, mediaType: .audio, position: .unspecified).devices
+        micPopup.removeAllItems()
+        micPopup.addItem(withTitle: "なし")
+        micPopup.addItems(withTitles: micDevices.map(\.localizedName))
+        if !recordMic {
+            micPopup.selectItem(at: 0)
+        } else if let i = micDevices.firstIndex(where: { $0.uniqueID == recordMicID }) ?? defaultMicIndex {
+            micPopup.selectItem(at: i + 1)
+        } else {
+            micPopup.selectItem(at: 0)
+        }
+        micMeter.start(selectedMic)
+    }
+
+    /// 既定のマイクの位置 (選んだマイクが外されたとき用)
+    var defaultMicIndex: Int? {
+        let def = AVCaptureDevice.default(for: .audio)?.uniqueID
+        return micDevices.firstIndex { $0.uniqueID == def } ?? (micDevices.isEmpty ? nil : 0)
+    }
+
+    @objc func micChanged(_ sender: NSPopUpButton) {
+        let i = sender.indexOfSelectedItem
+        recordMic = i > 0
+        if i > 0 { recordMicID = micDevices[i - 1].uniqueID }
+        micMeter.start(selectedMic)
+    }
+
+    /// 録画に使うマイク (なしなら nil)
+    var selectedMic: AVCaptureDevice? {
+        let i = micPopup.indexOfSelectedItem
+        return i > 0 && i - 1 < micDevices.count ? micDevices[i - 1] : nil
+    }
 
     @objc func recordToggled() {
         guard #available(macOS 12.3, *) else { return }
@@ -1070,7 +1139,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 do {
                     _ = try await rec.start(screen: self.overlayScreen,
                                             excluding: [self.window.windowNumber],
-                                            microphone: self.recordMic)
+                                            microphone: self.selectedMic)
                     self.recorder = rec
                     self.recordButton.title = "■ 録画停止"
                     self.recordStart = Date()
