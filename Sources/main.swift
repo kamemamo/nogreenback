@@ -332,6 +332,220 @@ final class PreviewView: MTKView, MTKViewDelegate {
     }
 }
 
+// MARK: - 画面に重ねる表示 (OBS なしで画面の隅に人物を浮かせる)
+
+/// 背景が透明な MTKView。人物以外は透けて後ろの画面が見える
+final class OverlayView: MTKView, MTKViewDelegate {
+    var processor: Processor!
+
+    func setup(processor: Processor) {
+        self.processor = processor
+        device = processor.device
+        framebufferOnly = false
+        colorPixelFormat = .bgra8Unorm
+        clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+        preferredFramesPerSecond = 60
+        layer?.isOpaque = false
+        delegate = self
+    }
+
+    func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
+
+    func draw(in view: MTKView) {
+        guard let drawable = currentDrawable,
+              let cb = processor.queue.makeCommandBuffer() else { return }
+        let size = drawableSize
+        var img = CIImage(color: .clear).cropped(to: CGRect(origin: .zero, size: size))
+        if let frame = processor.latestImage {
+            // 横はフィット、下端をそろえる (人物の下端が画面の下に付くように)
+            let e = frame.extent
+            let s = min(size.width / e.width, size.height / e.height)
+            let tx = (size.width - e.width * s) / 2 - e.minX * s
+            let fitted = frame.transformed(by: CGAffineTransform(scaleX: s, y: s)
+                .concatenating(CGAffineTransform(translationX: tx, y: -e.minY * s)))
+            img = fitted.composited(over: img)
+        }
+        let dest = CIRenderDestination(width: Int(size.width), height: Int(size.height),
+                                       pixelFormat: colorPixelFormat, commandBuffer: cb) {
+            drawable.texture
+        }
+        dest.isFlipped = true
+        dest.alphaMode = .premultiplied
+        _ = try? processor.ciContext.startTask(toRender: img, to: dest)
+        cb.present(drawable)
+        cb.commit()
+    }
+}
+
+/// 枠なし・透明・常に最前面・クリックは後ろへ通すウィンドウ。
+/// 他のアプリの全画面表示 (別スペース) の上にも出せるよう、アクティブにならないパネルにする
+final class OverlayWindow: NSPanel {
+    let view: OverlayView
+    private var keepFrontTimer: Timer?
+
+    init(processor: Processor) {
+        view = OverlayView(frame: .zero, device: processor.device)
+        super.init(contentRect: NSRect(x: 0, y: 0, width: 480, height: 270),
+                   styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        view.setup(processor: processor)
+        contentView = view
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = false
+        ignoresMouseEvents = true
+        isReleasedWhenClosed = false
+        isFloatingPanel = true
+        hidesOnDeactivate = false
+        // Keynote や PowerPoint のスライドショーより上 (画面を占有する表示と同じ最上位の層)
+        level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()))
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+    }
+
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+
+    enum Corner: Int, CaseIterable {
+        case bottomRight, bottomLeft, topRight, topLeft
+        var title: String { ["右下", "左下", "右上", "左上"][rawValue] }
+    }
+
+    /// 画面幅に対する割合 (scale) で大きさを決め、指定の隅に置く (映像は 16:9)
+    func place(on screen: NSScreen, corner: Corner, scale: Double) {
+        let sf = screen.frame
+        let w = (sf.width * scale).rounded(), h = (w * 9 / 16).rounded()
+        let x = (corner == .bottomRight || corner == .topRight) ? sf.maxX - w : sf.minX
+        let y = (corner == .bottomRight || corner == .bottomLeft) ? sf.minY : sf.maxY - h
+        setFrame(NSRect(x: x, y: y, width: w, height: h), display: true)
+    }
+
+    func setVisible(_ on: Bool) {
+        view.isPaused = !on
+        keepFrontTimer?.invalidate()
+        keepFrontTimer = nil
+        if on {
+            orderFrontRegardless()
+            // 同じ層に後から出たウィンドウ (スライドショー開始時など) に隠されないよう、定期的に最前面へ戻す
+            keepFrontTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+                self?.orderFrontRegardless()
+            }
+        } else {
+            orderOut(nil)
+        }
+    }
+}
+
+// MARK: - 手書きの注釈 (人物の表示よりさらに手前)
+
+/// 線を描くビュー。描いた線は残し、設定すれば一定時間後に消える
+final class AnnotationView: NSView {
+    struct Stroke {
+        var points: [CGPoint]
+        var color: NSColor
+        var width: CGFloat
+        var finished: Date?
+    }
+    var strokes: [Stroke] = []
+    var color = NSColor.systemRed
+    var lineWidth: CGFloat = 5
+    /// 描き終わってから消えるまでの秒数 (0 なら消えない)
+    var fadeAfter: TimeInterval = 0
+    /// 描画できる状態 (キーを押している間) なら画面の縁に枠を出して知らせる
+    var drawingMode = false { didSet { if drawingMode != oldValue { needsDisplay = true } } }
+
+    override var isFlipped: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        strokes.append(Stroke(points: [p], color: color, width: lineWidth, finished: nil))
+        needsDisplay = true
+    }
+    override func mouseDragged(with event: NSEvent) {
+        guard !strokes.isEmpty, strokes[strokes.count - 1].finished == nil else { return }
+        strokes[strokes.count - 1].points.append(convert(event.locationInWindow, from: nil))
+        needsDisplay = true
+    }
+    override func mouseUp(with event: NSEvent) { finishStroke() }
+    /// キーを押しながら右クリックで全部消す
+    override func rightMouseDown(with event: NSEvent) { clear() }
+
+    func finishStroke() {
+        if let i = strokes.indices.last, strokes[i].finished == nil { strokes[i].finished = Date() }
+    }
+    func clear() { strokes.removeAll(); needsDisplay = true }
+
+    /// 時間がたった線を消す (タイマーから呼ぶ)
+    func tick() {
+        guard fadeAfter > 0, !strokes.isEmpty else { return }
+        let now = Date()
+        strokes.removeAll { s in s.finished.map { now.timeIntervalSince($0) > fadeAfter } ?? false }
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.clear.set()
+        dirtyRect.fill()
+        let now = Date()
+        for s in strokes {
+            // 消える直前の 0.5 秒でフェードアウト
+            var alpha: CGFloat = 1
+            if fadeAfter > 0, let f = s.finished {
+                alpha = CGFloat(min(1, max(0, (fadeAfter - now.timeIntervalSince(f)) / 0.5)))
+            }
+            let path = NSBezierPath()
+            path.lineWidth = s.width
+            path.lineCapStyle = .round
+            path.lineJoinStyle = .round
+            path.move(to: s.points[0])
+            if s.points.count == 1 { path.line(to: s.points[0]) }
+            for p in s.points.dropFirst() { path.line(to: p) }
+            s.color.withAlphaComponent(alpha).setStroke()
+            path.stroke()
+        }
+        if drawingMode {
+            let frame = NSBezierPath(rect: bounds.insetBy(dx: 2, dy: 2))
+            frame.lineWidth = 4
+            color.withAlphaComponent(0.5).setStroke()
+            frame.stroke()
+        }
+    }
+}
+
+/// 画面全体を覆う透明なパネル。普段はクリックを後ろへ通し、キーを押している間だけ描ける
+final class AnnotationWindow: NSPanel {
+    let view = AnnotationView()
+
+    init() {
+        super.init(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+                   styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        contentView = view
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = false
+        ignoresMouseEvents = true
+        isReleasedWhenClosed = false
+        isFloatingPanel = true
+        hidesOnDeactivate = false
+        becomesKeyOnlyIfNeeded = true
+        // 人物の表示 (OverlayWindow) より 1 つ上
+        level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()) + 1)
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+    }
+
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+
+    func cover(_ screen: NSScreen) { setFrame(screen.frame, display: true) }
+
+    /// 描画モードの切り替え。オフに戻したら描きかけの線を確定する
+    func setDrawing(_ on: Bool) {
+        guard ignoresMouseEvents == on else { return }
+        ignoresMouseEvents = !on
+        view.drawingMode = on
+        if !on { view.finishStroke() }
+    }
+}
+
 // MARK: - アプリ本体
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -353,6 +567,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var targetFPS: Int32 {
         get { let v = UserDefaults.standard.integer(forKey: "frameRate"); return v > 0 ? Int32(v) : 25 }
         set { UserDefaults.standard.set(Int(newValue), forKey: "frameRate") }
+    }
+
+    // 画面に重ねる表示の設定 (次回起動時も使う)
+    var overlay: OverlayWindow!
+    var overlayCheck = NSButton()
+    var screenPopup = NSPopUpButton()
+    var overlayOn: Bool {
+        get { UserDefaults.standard.bool(forKey: "overlayOn") }
+        set { UserDefaults.standard.set(newValue, forKey: "overlayOn") }
+    }
+    var overlayCorner: OverlayWindow.Corner {
+        get { .init(rawValue: UserDefaults.standard.integer(forKey: "overlayCorner")) ?? .bottomRight }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "overlayCorner") }
+    }
+    var overlayScale: Double {
+        get { let v = UserDefaults.standard.double(forKey: "overlayScale"); return v > 0 ? v : 0.35 }
+        set { UserDefaults.standard.set(newValue, forKey: "overlayScale") }
+    }
+    // 手書きの注釈の設定
+    var annotation: AnnotationWindow!
+    var annotationTimer: Timer?
+    let drawKeys: [(title: String, flags: NSEvent.ModifierFlags)] = [
+        ("⌥ Option", .option), ("⌃ Control", .control), ("⌥⌘ Option+Command", [.option, .command]),
+    ]
+    let penColors: [(title: String, color: NSColor)] = [
+        ("赤", .systemRed), ("黄", .systemYellow), ("青", .systemBlue), ("緑", .systemGreen), ("白", .white), ("黒", .black),
+    ]
+    let fadeTimes: [(title: String, seconds: TimeInterval)] = [
+        ("消さない", 0), ("3秒で消す", 3), ("10秒で消す", 10),
+    ]
+    var annotationOn: Bool {
+        get { UserDefaults.standard.bool(forKey: "annotationOn") }
+        set { UserDefaults.standard.set(newValue, forKey: "annotationOn") }
+    }
+    var drawKeyIndex: Int {
+        get { min(UserDefaults.standard.integer(forKey: "drawKey"), drawKeys.count - 1) }
+        set { UserDefaults.standard.set(newValue, forKey: "drawKey") }
+    }
+    var penColorIndex: Int {
+        get { min(UserDefaults.standard.integer(forKey: "penColor"), penColors.count - 1) }
+        set { UserDefaults.standard.set(newValue, forKey: "penColor") }
+    }
+    var penWidth: Double {
+        get { let v = UserDefaults.standard.double(forKey: "penWidth"); return v > 0 ? v : 5 }
+        set { UserDefaults.standard.set(newValue, forKey: "penWidth") }
+    }
+    var fadeIndex: Int {
+        get { min(UserDefaults.standard.integer(forKey: "penFade"), fadeTimes.count - 1) }
+        set { UserDefaults.standard.set(newValue, forKey: "penFade") }
+    }
+
+    var overlayScreenName: String? {
+        get { UserDefaults.standard.string(forKey: "overlayScreen") }
+        set { UserDefaults.standard.set(newValue, forKey: "overlayScreen") }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -454,14 +722,93 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         fpsLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
 
-        let root = NSStackView(views: [bar, bar2, preview])
+        // 3 段目: 画面に重ねる表示
+        overlay = OverlayWindow(processor: processor)
+        overlayCheck = NSButton(checkboxWithTitle: "画面に表示", target: self, action: #selector(overlayToggled(_:)))
+        overlayCheck.state = overlayOn ? .on : .off
+        overlayCheck.toolTip = "OBS を使わずに、人物を画面の隅に常に手前で表示します (クリックは後ろのアプリに届きます)"
+        let cornerPopup = NSPopUpButton()
+        cornerPopup.addItems(withTitles: OverlayWindow.Corner.allCases.map(\.title))
+        cornerPopup.selectItem(at: overlayCorner.rawValue)
+        cornerPopup.target = self
+        cornerPopup.action = #selector(cornerChanged(_:))
+        let sizeSlider = NSSlider(value: overlayScale, minValue: 0.15, maxValue: 0.8,
+                                  target: self, action: #selector(overlaySizeChanged(_:)))
+        sizeSlider.widthAnchor.constraint(equalToConstant: 140).isActive = true
+        sizeSlider.toolTip = "画面の幅に対する大きさ"
+        screenPopup.target = self
+        screenPopup.action = #selector(screenChanged(_:))
+        refreshScreens()
+        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            self?.refreshScreens(); self?.placeOverlay()
+        }
+        let bar3 = NSStackView(views: [
+            overlayCheck,
+            NSTextField(labelWithString: "位置"), cornerPopup,
+            NSTextField(labelWithString: "大きさ"), sizeSlider,
+            NSTextField(labelWithString: "表示する画面"), screenPopup, NSView(),
+        ])
+        bar3.orientation = .horizontal
+        bar3.spacing = 8
+        bar3.edgeInsets = NSEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
+        placeOverlay()
+        overlay.setVisible(overlayOn)
+
+        // 4 段目: 手書きの注釈
+        annotation = AnnotationWindow()
+        annotation.view.color = penColors[penColorIndex].color
+        annotation.view.lineWidth = CGFloat(penWidth)
+        annotation.view.fadeAfter = fadeTimes[fadeIndex].seconds
+        let annotationCheck = NSButton(checkboxWithTitle: "手書き", target: self, action: #selector(annotationToggled(_:)))
+        annotationCheck.state = annotationOn ? .on : .off
+        annotationCheck.toolTip = "選んだキーを押している間だけ、画面にペンで書けます。離すと後ろのアプリを操作できます"
+        let keyPopup = NSPopUpButton()
+        keyPopup.addItems(withTitles: drawKeys.map(\.title))
+        keyPopup.selectItem(at: drawKeyIndex)
+        keyPopup.target = self
+        keyPopup.action = #selector(drawKeyChanged(_:))
+        let colorPopup = NSPopUpButton()
+        colorPopup.addItems(withTitles: penColors.map(\.title))
+        colorPopup.selectItem(at: penColorIndex)
+        colorPopup.target = self
+        colorPopup.action = #selector(penColorChanged(_:))
+        let widthSlider = NSSlider(value: penWidth, minValue: 2, maxValue: 20,
+                                   target: self, action: #selector(penWidthChanged(_:)))
+        widthSlider.widthAnchor.constraint(equalToConstant: 100).isActive = true
+        let fadePopup = NSPopUpButton()
+        fadePopup.addItems(withTitles: fadeTimes.map(\.title))
+        fadePopup.selectItem(at: fadeIndex)
+        fadePopup.target = self
+        fadePopup.action = #selector(fadeChanged(_:))
+        let clearButton = NSButton(title: "消去", target: self, action: #selector(clearAnnotation))
+        let hint = NSTextField(labelWithString: "キーを押しながらドラッグで描く／キーを2回押すか、押しながら右クリックで全消去")
+        hint.textColor = .secondaryLabelColor
+        let bar4 = NSStackView(views: [
+            annotationCheck,
+            NSTextField(labelWithString: "描くキー"), keyPopup,
+            NSTextField(labelWithString: "色"), colorPopup,
+            NSTextField(labelWithString: "太さ"), widthSlider,
+            fadePopup, clearButton, hint, NSView(),
+        ])
+        bar4.orientation = .horizontal
+        bar4.spacing = 8
+        bar4.edgeInsets = NSEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
+        setAnnotationVisible(annotationOn)
+
+        let root = NSStackView(views: [bar, bar2, bar3, bar4, preview])
         root.orientation = .vertical
         root.spacing = 0
         root.alignment = .leading
         bar.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
         bar2.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        bar3.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        bar4.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
         preview.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
         window.contentView = root
+        // 画面に重ねた表示が残っていても、メインウィンドウを閉じたら終了する
+        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification,
+                                               object: window, queue: .main) { _ in NSApp.terminate(nil) }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -590,6 +937,105 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applyFrameRate()
     }
     @objc func deflickerChanged(_ sender: NSSlider) { settings.deflicker = sender.doubleValue }
+
+    // MARK: 画面に重ねる表示
+
+    var overlayScreen: NSScreen {
+        NSScreen.screens.first { $0.localizedName == overlayScreenName } ?? NSScreen.main ?? NSScreen.screens[0]
+    }
+
+    func refreshScreens() {
+        screenPopup.removeAllItems()
+        screenPopup.addItems(withTitles: NSScreen.screens.map(\.localizedName))
+        screenPopup.selectItem(withTitle: overlayScreen.localizedName)
+    }
+
+    func placeOverlay() {
+        overlay?.place(on: overlayScreen, corner: overlayCorner, scale: overlayScale)
+        annotation?.cover(overlayScreen)
+    }
+
+    // MARK: 手書きの注釈
+
+    func setAnnotationVisible(_ on: Bool) {
+        annotationTimer?.invalidate()
+        annotationTimer = nil
+        annotation.setDrawing(false)
+        guard on else { annotation.orderOut(nil); return }
+        annotation.cover(overlayScreen)
+        annotation.orderFrontRegardless()
+        // キーの状態を見て描画モードを切り替える。NSEvent.modifierFlags は
+        // 他のアプリが前面でも読めて、アクセシビリティの許可も要らない
+        var frontCount = 0
+        // 描くキーを素早く 2 回押す (描かずに離す) と全消し
+        var wasDown = false, pressStart = Date.distantPast, strokesAtPress = 0, lastTap = Date.distantPast
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let held = NSEvent.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                .subtracting([.capsLock, .numericPad, .function])
+            let down = held == self.drawKeys[self.drawKeyIndex].flags
+            let now = Date()
+            if down && !wasDown {
+                pressStart = now
+                strokesAtPress = self.annotation.view.strokes.count
+            } else if !down && wasDown {
+                let isTap = now.timeIntervalSince(pressStart) < 0.3
+                    && self.annotation.view.strokes.count == strokesAtPress
+                if isTap && pressStart.timeIntervalSince(lastTap) < 0.4 {
+                    self.annotation.view.clear()
+                    lastTap = .distantPast
+                } else {
+                    lastTap = isTap ? now : .distantPast
+                }
+            }
+            wasDown = down
+            self.annotation.setDrawing(down)
+            self.annotation.view.tick()
+            // 定期的に最前面へ戻す (1 秒ごと)
+            frontCount += 1
+            if frontCount >= 60 { frontCount = 0; self.annotation.orderFrontRegardless() }
+        }
+        // ドラッグ中 (イベント追跡中) も止まらないよう common モードで回す
+        RunLoop.main.add(timer, forMode: .common)
+        annotationTimer = timer
+    }
+
+    @objc func annotationToggled(_ sender: NSButton) {
+        annotationOn = sender.state == .on
+        setAnnotationVisible(annotationOn)
+    }
+    @objc func drawKeyChanged(_ sender: NSPopUpButton) { drawKeyIndex = sender.indexOfSelectedItem }
+    @objc func penColorChanged(_ sender: NSPopUpButton) {
+        penColorIndex = sender.indexOfSelectedItem
+        annotation.view.color = penColors[penColorIndex].color
+    }
+    @objc func penWidthChanged(_ sender: NSSlider) {
+        penWidth = sender.doubleValue
+        annotation.view.lineWidth = CGFloat(penWidth)
+    }
+    @objc func fadeChanged(_ sender: NSPopUpButton) {
+        fadeIndex = sender.indexOfSelectedItem
+        annotation.view.fadeAfter = fadeTimes[fadeIndex].seconds
+    }
+    @objc func clearAnnotation() { annotation.view.clear() }
+
+    @objc func overlayToggled(_ sender: NSButton) {
+        overlayOn = sender.state == .on
+        placeOverlay()
+        overlay.setVisible(overlayOn)
+    }
+    @objc func cornerChanged(_ sender: NSPopUpButton) {
+        overlayCorner = .init(rawValue: sender.indexOfSelectedItem) ?? .bottomRight
+        placeOverlay()
+    }
+    @objc func overlaySizeChanged(_ sender: NSSlider) {
+        overlayScale = sender.doubleValue
+        placeOverlay()
+    }
+    @objc func screenChanged(_ sender: NSPopUpButton) {
+        overlayScreenName = sender.titleOfSelectedItem
+        placeOverlay()
+    }
 
     @objc func cameraChanged() {
         let i = cameraPopup.indexOfSelectedItem
