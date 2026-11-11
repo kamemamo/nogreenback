@@ -66,7 +66,10 @@ PLIST
 
 # アドホック署名 (Developer ID 証明書がないため。他の Mac では初回起動時に許可が必要)
 codesign --force --sign - "$APP/Contents/Frameworks/Syphon.framework"
-codesign --force --sign - "$APP"
+# アドホック署名の既定の条件は「ビルドの中身 (cdhash) が同じこと」なので、ビルドし直すたびに
+# macOS からは別のアプリに見え、画面収録などの許可が外れてしまう。
+# 条件を「バンドル ID が local.nogreenback であること」にして、ビルドし直しても許可を引き継ぐ
+codesign --force --sign - -r='designated => identifier "local.nogreenback"' "$APP"
 codesign --verify --deep --strict "$APP"
 echo "==> 完成: $PWD/$APP  ($(lipo -archs "$APP/Contents/MacOS/NoGreenBack"))"
 
