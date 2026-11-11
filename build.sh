@@ -60,6 +60,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>$MIN_OS</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSCameraUsageDescription</key><string>人物を切り抜いて Syphon で送出するためにカメラを使用します。</string>
+  <key>NSMicrophoneUsageDescription</key><string>画面録画にマイクの音声を入れるために使用します。</string>
 </dict></plist>
 PLIST
 

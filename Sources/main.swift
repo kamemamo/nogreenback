@@ -7,6 +7,7 @@
 
 import AppKit
 import AVFoundation
+import Carbon.HIToolbox
 import CoreImage
 import CoreImage.CIFilterBuiltins
 import Metal
@@ -585,9 +586,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         get { let v = UserDefaults.standard.double(forKey: "overlayScale"); return v > 0 ? v : 0.35 }
         set { UserDefaults.standard.set(newValue, forKey: "overlayScale") }
     }
+    // 画面録画
+    var recorder: AnyObject?   // ScreenRecorder (macOS 12.3 以降)
+    var recordButton = NSButton()
+    var recordLabel = NSTextField(labelWithString: "")
+    var recordStart = Date()
+    var recordTimer: Timer?
+    var recordMic: Bool {
+        get { UserDefaults.standard.object(forKey: "recordMic") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "recordMic") }
+    }
+
     // 手書きの注釈の設定
     var annotation: AnnotationWindow!
     var annotationTimer: Timer?
+    var annotationCheck = NSButton()
+    var colorPopup = NSPopUpButton()
+    /// Stream Deck などから切り替える「ペン」状態 (キーを押していなくても描ける)
+    var penLatched = false
+    var hotKeys: HotKeys?
     let drawKeys: [(title: String, flags: NSEvent.ModifierFlags)] = [
         ("⌥ Option", .option), ("⌃ Control", .control), ("⌥⌘ Option+Command", [.option, .command]),
     ]
@@ -639,6 +656,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    /// 録画中に終了するときは、ファイルを閉じてから終了する (閉じないと再生できないファイルになる)
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard #available(macOS 12.3, *), let rec = recorder as? ScreenRecorder else { return .terminateNow }
+        Task { @MainActor in
+            _ = await rec.stop()
+            self.recorder = nil
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
 
     func applicationWillTerminate(_ notification: Notification) {
         session.stopRunning()
@@ -743,11 +771,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                                object: nil, queue: .main) { [weak self] _ in
             self?.refreshScreens(); self?.placeOverlay()
         }
+        recordButton = NSButton(title: "● 録画開始", target: self, action: #selector(recordToggled))
+        recordButton.toolTip = "「表示する画面」を録画して、ムービーフォルダに保存します (このウィンドウは映りません)。⌃⌥⌘R でも開始・停止できます"
+        let micCheck = NSButton(checkboxWithTitle: "マイク音声", target: self, action: #selector(micToggled(_:)))
+        micCheck.state = recordMic ? .on : .off
+        recordLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        recordLabel.textColor = .systemRed
+        if #unavailable(macOS 12.3) {
+            recordButton.isEnabled = false
+            recordButton.toolTip = "画面録画には macOS 12.3 以降が必要です"
+        }
         let bar3 = NSStackView(views: [
             overlayCheck,
             NSTextField(labelWithString: "位置"), cornerPopup,
             NSTextField(labelWithString: "大きさ"), sizeSlider,
             NSTextField(labelWithString: "表示する画面"), screenPopup, NSView(),
+            recordButton, micCheck, recordLabel,
         ])
         bar3.orientation = .horizontal
         bar3.spacing = 8
@@ -760,15 +799,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         annotation.view.color = penColors[penColorIndex].color
         annotation.view.lineWidth = CGFloat(penWidth)
         annotation.view.fadeAfter = fadeTimes[fadeIndex].seconds
-        let annotationCheck = NSButton(checkboxWithTitle: "手書き", target: self, action: #selector(annotationToggled(_:)))
+        annotationCheck = NSButton(checkboxWithTitle: "手書き", target: self, action: #selector(annotationToggled(_:)))
         annotationCheck.state = annotationOn ? .on : .off
-        annotationCheck.toolTip = "選んだキーを押している間だけ、画面にペンで書けます。離すと後ろのアプリを操作できます"
+        annotationCheck.toolTip = "選んだキーを押している間だけ、画面にペンで書けます。離すと後ろのアプリを操作できます。⌃⌥⌘D でペンを押しっぱなし状態にできます"
         let keyPopup = NSPopUpButton()
         keyPopup.addItems(withTitles: drawKeys.map(\.title))
         keyPopup.selectItem(at: drawKeyIndex)
         keyPopup.target = self
         keyPopup.action = #selector(drawKeyChanged(_:))
-        let colorPopup = NSPopUpButton()
+        colorPopup = NSPopUpButton()
         colorPopup.addItems(withTitles: penColors.map(\.title))
         colorPopup.selectItem(at: penColorIndex)
         colorPopup.target = self
@@ -811,6 +850,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                                object: window, queue: .main) { _ in NSApp.terminate(nil) }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        registerHotKeys()
     }
 
     func showAlert(_ text: String) {
@@ -955,6 +995,103 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         annotation?.cover(overlayScreen)
     }
 
+    // MARK: 全体で効くショートカット (Stream Deck の「ホットキー」から使う)
+
+    /// (キー, キーコード, 内容, 動作)
+    var hotKeyList: [(key: String, code: Int, title: String, action: () -> Void)] {
+        [
+            ("R", kVK_ANSI_R, "録画の開始・停止", { [weak self] in self?.recordToggled() }),
+            ("P", kVK_ANSI_P, "人物を画面に表示・非表示", { [weak self] in self?.toggleOverlay() }),
+            ("C", kVK_ANSI_C, "手書きを全部消す", { [weak self] in self?.annotation.view.clear() }),
+            ("D", kVK_ANSI_D, "ペン (描画モード) のオン・オフ", { [weak self] in self?.togglePen() }),
+            ("K", kVK_ANSI_K, "ペンの色を次の色へ", { [weak self] in self?.nextPenColor() }),
+        ]
+    }
+
+    func registerHotKeys() {
+        let keys = HotKeys()
+        var failed: [String] = []
+        for k in hotKeyList where !keys.register(keyCode: k.code, k.action) {
+            failed.append("\(HotKeys.modifierSymbols)\(k.key)（\(k.title)）")
+        }
+        hotKeys = keys
+        if !failed.isEmpty {
+            showAlert("次のショートカットは他のアプリが使っているため登録できませんでした:\n" + failed.joined(separator: "\n"))
+        }
+    }
+
+    func toggleOverlay() {
+        overlayCheck.state = overlayCheck.state == .on ? .off : .on
+        overlayToggled(overlayCheck)
+    }
+
+    func togglePen() {
+        if !annotationOn {
+            annotationCheck.state = .on
+            annotationToggled(annotationCheck)
+        }
+        penLatched.toggle()
+        annotation.setDrawing(penLatched)
+    }
+
+    func nextPenColor() {
+        let i = (penColorIndex + 1) % penColors.count
+        colorPopup.selectItem(at: i)
+        penColorChanged(colorPopup)
+    }
+
+    // MARK: 画面録画
+
+    @objc func micToggled(_ sender: NSButton) { recordMic = sender.state == .on }
+
+    @objc func recordToggled() {
+        guard #available(macOS 12.3, *) else { return }
+        recordButton.isEnabled = false
+        if let rec = recorder as? ScreenRecorder {
+            // 停止
+            Task { @MainActor in
+                let url = await rec.stop()
+                self.recorder = nil
+                self.recordTimer?.invalidate()
+                self.recordLabel.stringValue = ""
+                self.recordButton.title = "● 録画開始"
+                self.recordButton.isEnabled = true
+                if let url { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                else { self.showAlert("画面に変化がなかったため、録画は保存されませんでした。") }
+            }
+        } else {
+            // 開始
+            let rec = ScreenRecorder()
+            rec.onError = { [weak self] msg in
+                self?.showAlert(msg)
+                if self?.recorder != nil { self?.recordToggled() }
+            }
+            Task { @MainActor in
+                do {
+                    _ = try await rec.start(screen: self.overlayScreen,
+                                            excluding: [self.window.windowNumber],
+                                            microphone: self.recordMic)
+                    self.recorder = rec
+                    self.recordButton.title = "■ 録画停止"
+                    self.recordStart = Date()
+                    self.recordLabel.stringValue = "0:00"
+                    let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+                        guard let self else { return }
+                        let s = Int(Date().timeIntervalSince(self.recordStart))
+                        self.recordLabel.stringValue = s >= 3600
+                            ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60)
+                            : String(format: "%d:%02d", s / 60, s % 60)
+                    }
+                    RunLoop.main.add(t, forMode: .common)
+                    self.recordTimer = t
+                } catch {
+                    self.showAlert("録画を開始できません: \(error.localizedDescription)\n\n初回は「システム設定 > プライバシーとセキュリティ > 画面収録」で NoGreenBack を許可し、アプリを開き直してください。")
+                }
+                self.recordButton.isEnabled = true
+            }
+        }
+    }
+
     // MARK: 手書きの注釈
 
     func setAnnotationVisible(_ on: Bool) {
@@ -989,7 +1126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
             wasDown = down
-            self.annotation.setDrawing(down)
+            self.annotation.setDrawing(down || self.penLatched)
             self.annotation.view.tick()
             // 定期的に最前面へ戻す (1 秒ごと)
             frontCount += 1
@@ -1002,6 +1139,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func annotationToggled(_ sender: NSButton) {
         annotationOn = sender.state == .on
+        if !annotationOn { penLatched = false }
         setAnnotationVisible(annotationOn)
     }
     @objc func drawKeyChanged(_ sender: NSPopUpButton) { drawKeyIndex = sender.indexOfSelectedItem }
