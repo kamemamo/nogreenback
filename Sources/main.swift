@@ -28,6 +28,8 @@ final class Settings: @unchecked Sendable {
     private var _tighten: Double = 0.3
     private var _hold: Double = 0.2
     private var _deflicker: Double = 0.7
+    private var _pipCorner = 0
+    private var _pipScale: Double = 0.35
 
     private func get<T>(_ v: () -> T) -> T { lock.lock(); defer { lock.unlock() }; return v() }
     private func set(_ f: () -> Void) { lock.lock(); f(); lock.unlock() }
@@ -50,6 +52,9 @@ final class Settings: @unchecked Sendable {
     var hold: Double { get { get { _hold } } set { set { _hold = newValue } } }
     /// 明るさ安定化 0...1 (0 = なし)。照明のフリッカーによる画面全体の明滅をならす
     var deflicker: Double { get { get { _deflicker } } set { set { _deflicker = newValue } } }
+    /// 背景映像があるときの人物の位置 (OverlayWindow.Corner の rawValue) と、画面幅に対する大きさ
+    var pipCorner: Int { get { get { _pipCorner } } set { set { _pipCorner = newValue } } }
+    var pipScale: Double { get { get { _pipScale } } set { set { _pipScale = newValue } } }
 }
 
 // MARK: - 映像処理
@@ -73,6 +78,11 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
     private var lumaAverage: Double?
     private let previewLock = NSLock()
     private var _latestImage: CIImage?
+    private var _latestCutout: CIImage?
+    /// 画面に重ねる表示用の最新フレーム (背景なしの人物だけ)
+    var latestCutout: CIImage? {
+        previewLock.lock(); defer { previewLock.unlock() }; return _latestCutout
+    }
     /// プレビュー用の最新フレーム (切り抜き済み)
     var latestImage: CIImage? {
         previewLock.lock(); defer { previewLock.unlock() }; return _latestImage
@@ -81,6 +91,8 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
     private var frameCount = 0
     private var fpsStart = CACurrentMediaTime()
     var onFPS: ((Double) -> Void)?
+    /// 人物の後ろに敷く映像 (USB キャプチャーなど)
+    let background = BackgroundSource()
 
     init(device: MTLDevice, settings: Settings) {
         self.device = device
@@ -253,6 +265,25 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
         }
         source = cutout
 
+        // 背景映像があれば、画面を埋めるように拡大して敷き (はみ出した分は切る)、
+        // 人物は「位置」「大きさ」に合わせて小さくして隅に置く
+        if let bg = background.latestImage {
+            let be = bg.extent
+            let s = max(extent.width / be.width, extent.height / be.height)
+            let tx = (extent.width - be.width * s) / 2 - be.minX * s
+            let ty = (extent.height - be.height * s) / 2 - be.minY * s
+            let fitted = bg.transformed(by: CGAffineTransform(scaleX: s, y: s)
+                .concatenating(CGAffineTransform(translationX: tx, y: ty)))
+            let corner = OverlayWindow.Corner(rawValue: settings.pipCorner) ?? .bottomRight
+            let ps = CGFloat(settings.pipScale)
+            let w = extent.width * ps, h = extent.height * ps
+            let px = (corner == .bottomRight || corner == .topRight) ? extent.width - w : 0
+            let py = (corner == .bottomRight || corner == .bottomLeft) ? 0 : extent.height - h   // 左下原点
+            let person = cutout.transformed(by: CGAffineTransform(scaleX: ps, y: ps)
+                .concatenating(CGAffineTransform(translationX: px, y: py)))
+            source = person.composited(over: fitted).cropped(to: extent)
+        }
+
         // 3) テクスチャに描画して Syphon 送出
         let w = Int(extent.width), h = Int(extent.height)
         let tex = texture(width: w, height: h)
@@ -272,7 +303,7 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
                                    flipped: false)
         cb.commit()
 
-        previewLock.lock(); _latestImage = source; previewLock.unlock()
+        previewLock.lock(); _latestImage = source; _latestCutout = cutout; previewLock.unlock()
 
         frameCount += 1
         let now = CACurrentMediaTime()
@@ -288,6 +319,8 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
 
 final class PreviewView: MTKView, MTKViewDelegate {
     var processor: Processor!
+    /// false なら市松模様の代わりに黒を敷く (全画面出力用)
+    var checkered = true
     private var checker: CIImage = {
         let f = CIFilter.checkerboardGenerator()
         f.color0 = CIColor(red: 0.8, green: 0.8, blue: 0.8)
@@ -310,9 +343,10 @@ final class PreviewView: MTKView, MTKViewDelegate {
     func draw(in view: MTKView) {
         guard let drawable = currentDrawable,
               let cb = processor.queue.makeCommandBuffer() else { return }
-        let size = drawableSize
+        // drawableSize ではなく実際のテクスチャの大きさに合わせる (画面を移ったときに食い違うことがある)
+        let size = CGSize(width: drawable.texture.width, height: drawable.texture.height)
         let bounds = CGRect(origin: .zero, size: size)
-        var img = checker.cropped(to: bounds)
+        var img = checkered ? checker.cropped(to: bounds) : CIImage(color: .black).cropped(to: bounds)
         if let frame = processor.latestImage {
             // アスペクト比を保ってフィット
             let e = frame.extent
@@ -357,7 +391,7 @@ final class OverlayView: MTKView, MTKViewDelegate {
               let cb = processor.queue.makeCommandBuffer() else { return }
         let size = drawableSize
         var img = CIImage(color: .clear).cropped(to: CGRect(origin: .zero, size: size))
-        if let frame = processor.latestImage {
+        if let frame = processor.latestCutout {
             // 横はフィット、下端をそろえる (人物の下端が画面の下に付くように)
             let e = frame.extent
             let s = min(size.width / e.width, size.height / e.height)
@@ -547,6 +581,46 @@ final class AnnotationWindow: NSPanel {
     }
 }
 
+/// 手書きの注釈を、つながっているすべての画面に用意する
+/// (液晶タブレットのように別の画面として認識される機器の上でも描けるように)
+final class Annotations {
+    private(set) var windows: [AnnotationWindow] = []
+    private var shown = false
+    private var drawing = false
+
+    var color: NSColor = .systemRed { didSet { windows.forEach { $0.view.color = color } } }
+    var lineWidth: CGFloat = 5 { didSet { windows.forEach { $0.view.lineWidth = lineWidth } } }
+    var fadeAfter: TimeInterval = 0 { didSet { windows.forEach { $0.view.fadeAfter = fadeAfter } } }
+
+    var strokeCount: Int { windows.reduce(0) { $0 + $1.view.strokes.count } }
+
+    /// 画面の構成に合わせて、画面ごとのウィンドウを作り直す (描いた線は消える)
+    func coverAllScreens() {
+        let screens = NSScreen.screens
+        if windows.count == screens.count {
+            zip(windows, screens).forEach { $0.cover($1) }
+            return
+        }
+        windows.forEach { $0.orderOut(nil) }
+        windows = screens.map { screen in
+            let w = AnnotationWindow()
+            w.view.color = color
+            w.view.lineWidth = lineWidth
+            w.view.fadeAfter = fadeAfter
+            w.cover(screen)
+            w.setDrawing(drawing)
+            if shown { w.orderFrontRegardless() }
+            return w
+        }
+    }
+
+    func clear() { windows.forEach { $0.view.clear() } }
+    func tick() { windows.forEach { $0.view.tick() } }
+    func setDrawing(_ on: Bool) { drawing = on; windows.forEach { $0.setDrawing(on) } }
+    func orderFront() { shown = true; windows.forEach { $0.orderFrontRegardless() } }
+    func orderOut() { shown = false; windows.forEach { $0.orderOut(nil) } }
+}
+
 // MARK: - アプリ本体
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -602,13 +676,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         set { UserDefaults.standard.set(newValue, forKey: "recordMicID") }
     }
     var micPopup = NSPopUpButton()
+
+    // 背景映像と全画面出力
+    var bgPopup = NSPopUpButton()
+    var bgDevices: [AVCaptureDevice] = []
+    var outputCheck = NSButton()
+    var outputScreenPopup = NSPopUpButton()
+    var outputWindow: OutputWindow?
+    /// 背景にする映像の uniqueID (nil なら背景なし)
+    var backgroundID: String? {
+        get { UserDefaults.standard.string(forKey: "backgroundID") }
+        set { UserDefaults.standard.set(newValue, forKey: "backgroundID") }
+    }
+    var outputScreenName: String? {
+        get { UserDefaults.standard.string(forKey: "outputScreen") }
+        set { UserDefaults.standard.set(newValue, forKey: "outputScreen") }
+    }
     let micMeter = MicMeter()
     let micLevel = NSLevelIndicator()
     var micLevelTimer: Timer?
     var micDevices: [AVCaptureDevice] = []
 
     // 手書きの注釈の設定
-    var annotation: AnnotationWindow!
+    var annotation: Annotations!
     var annotationTimer: Timer?
     var annotationCheck = NSButton()
     var colorPopup = NSPopUpButton()
@@ -659,7 +749,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         buildUI()
         AVCaptureDevice.requestAccess(for: .video) { ok in
             DispatchQueue.main.async {
-                if ok { self.refreshCameras(); self.startSession() }
+                if ok { self.refreshCameras(); self.startSession(); self.refreshBackgrounds() }
                 else { self.showAlert("カメラへのアクセスが許可されていません。\nシステム設定 > プライバシーとセキュリティ > カメラ で許可してください。") }
             }
         }
@@ -779,7 +869,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshScreens()
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
                                                object: nil, queue: .main) { [weak self] _ in
-            self?.refreshScreens(); self?.placeOverlay()
+            self?.refreshScreens(); self?.placeOverlay(); self?.placeOutput()
         }
         recordButton = NSButton(title: "● 録画開始", target: self, action: #selector(recordToggled))
         recordButton.toolTip = "「表示する画面」を録画して、ムービーフォルダに保存します (このウィンドウは映りません)。⌃⌥⌘R でも開始・停止できます"
@@ -807,6 +897,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for name in [AVCaptureDevice.wasConnectedNotification, AVCaptureDevice.wasDisconnectedNotification] {
             NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 self?.refreshMics()
+                self?.refreshBackgrounds()
             }
         }
         recordLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
@@ -826,13 +917,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         bar3.spacing = 8
         bar3.edgeInsets = NSEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
         placeOverlay()
-        overlay.setVisible(overlayOn)
+        updateOverlayVisibility()
 
         // 4 段目: 手書きの注釈
-        annotation = AnnotationWindow()
-        annotation.view.color = penColors[penColorIndex].color
-        annotation.view.lineWidth = CGFloat(penWidth)
-        annotation.view.fadeAfter = fadeTimes[fadeIndex].seconds
+        annotation = Annotations()
+        annotation.color = penColors[penColorIndex].color
+        annotation.lineWidth = CGFloat(penWidth)
+        annotation.fadeAfter = fadeTimes[fadeIndex].seconds
+        annotation.coverAllScreens()
         annotationCheck = NSButton(checkboxWithTitle: "手書き", target: self, action: #selector(annotationToggled(_:)))
         annotationCheck.state = annotationOn ? .on : .off
         annotationCheck.toolTip = "選んだキーを押している間だけ、画面にペンで書けます。離すと後ろのアプリを操作できます。⌃⌥⌘D でペンを押しっぱなし状態にできます"
@@ -869,7 +961,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         bar4.edgeInsets = NSEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
         setAnnotationVisible(annotationOn)
 
-        let root = NSStackView(views: [bar, bar2, bar3, bar4, preview])
+        // 5 段目: 背景映像と全画面出力
+        bgPopup.target = self
+        bgPopup.action = #selector(backgroundChanged(_:))
+        bgPopup.toolTip = "USB キャプチャーなどの映像を人物の後ろに敷きます"
+        outputCheck = NSButton(checkboxWithTitle: "全画面で出す", target: self, action: #selector(outputToggled(_:)))
+        outputCheck.toolTip = "合成した映像を、選んだ画面いっぱいに表示します。Esc か \(HotKeys.modifierSymbols)F で閉じます"
+        outputScreenPopup.target = self
+        outputScreenPopup.action = #selector(outputScreenChanged(_:))
+        let outputHint = NSTextField(labelWithString: "Esc か \(HotKeys.modifierSymbols)F で閉じる")
+        outputHint.textColor = .secondaryLabelColor
+        outputHint.font = .systemFont(ofSize: 11)
+        let bar5 = NSStackView(views: [
+            NSTextField(labelWithString: "背景映像"), bgPopup,
+            outputCheck, NSTextField(labelWithString: "出す画面"), outputScreenPopup, outputHint, NSView(),
+        ])
+        bar5.orientation = .horizontal
+        bar5.spacing = 8
+        bar5.edgeInsets = NSEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
+        refreshScreens()
+
+        let root = NSStackView(views: [bar, bar2, bar3, bar4, bar5, preview])
         root.orientation = .vertical
         root.spacing = 0
         root.alignment = .leading
@@ -877,6 +989,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         bar2.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
         bar3.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
         bar4.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        bar5.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
         preview.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
         window.contentView = root
         // 画面に重ねた表示が残っていても、メインウィンドウを閉じたら終了する
@@ -1022,11 +1135,91 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         screenPopup.removeAllItems()
         screenPopup.addItems(withTitles: NSScreen.screens.map(\.localizedName))
         screenPopup.selectItem(withTitle: overlayScreen.localizedName)
+        outputScreenPopup.removeAllItems()
+        outputScreenPopup.addItems(withTitles: NSScreen.screens.map(\.localizedName))
+        outputScreenPopup.selectItem(withTitle: outputScreen.localizedName)
+    }
+
+    // MARK: 背景映像と全画面出力
+
+    /// 全画面出力の画面 (未設定なら、メイン以外の画面があればそちら = プロジェクターなど)
+    var outputScreen: NSScreen {
+        NSScreen.screens.first { $0.localizedName == outputScreenName }
+            ?? NSScreen.screens.first { $0 != NSScreen.main } ?? NSScreen.main ?? NSScreen.screens[0]
+    }
+
+    func refreshBackgrounds() {
+        var types: [AVCaptureDevice.DeviceType] = [.builtInWideAngleCamera]
+        if #available(macOS 14.0, *) { types += [.external, .continuityCamera] }
+        else { types.append(.externalUnknown) }
+        bgDevices = AVCaptureDevice.DiscoverySession(deviceTypes: types, mediaType: .video,
+                                                     position: .unspecified).devices
+        bgPopup.removeAllItems()
+        bgPopup.addItem(withTitle: "なし（透明）")
+        bgPopup.addItems(withTitles: bgDevices.map(\.localizedName))
+        let i = bgDevices.firstIndex { $0.uniqueID == backgroundID }
+        bgPopup.selectItem(at: i.map { $0 + 1 } ?? 0)
+        applyBackground()
+    }
+
+    func applyBackground() {
+        let i = bgPopup.indexOfSelectedItem
+        let device = i > 0 && i - 1 < bgDevices.count ? bgDevices[i - 1] : nil
+        do {
+            try processor.background.start(device)
+        } catch {
+            showAlert("背景映像を開けません: \(error.localizedDescription)")
+            bgPopup.selectItem(at: 0)
+            try? processor.background.start(nil)
+        }
+    }
+
+    @objc func backgroundChanged(_ sender: NSPopUpButton) {
+        let i = sender.indexOfSelectedItem
+        backgroundID = i > 0 ? bgDevices[i - 1].uniqueID : nil
+        applyBackground()
+    }
+
+    @objc func outputToggled(_ sender: NSButton) { setOutputVisible(sender.state == .on) }
+
+    func toggleOutput() { setOutputVisible(outputWindow == nil) }
+
+    func setOutputVisible(_ on: Bool) {
+        outputCheck.state = on ? .on : .off
+        if on {
+            outputWindow?.orderOut(nil)
+            let w = OutputWindow(processor: processor, screen: outputScreen)
+            w.onClose = { [weak self] in self?.setOutputVisible(false) }
+            outputWindow = w
+            w.show(on: outputScreen)
+        } else {
+            outputWindow?.orderOut(nil)
+            outputWindow = nil
+        }
+        updateOverlayVisibility()
+    }
+
+    func placeOutput() {
+        // 画面を替えたら作り直す
+        if outputWindow != nil { setOutputVisible(true) }
+    }
+
+    @objc func outputScreenChanged(_ sender: NSPopUpButton) {
+        outputScreenName = sender.titleOfSelectedItem
+        placeOutput()
+    }
+
+    /// 全画面出力が同じ画面に出ている間は、重ねる表示を隠す (出力の中にもう人物が入っているので)
+    func updateOverlayVisibility() {
+        let covered = outputWindow != nil && outputScreen == overlayScreen
+        overlay?.setVisible(overlayOn && !covered)
     }
 
     func placeOverlay() {
+        settings.pipCorner = overlayCorner.rawValue
+        settings.pipScale = overlayScale
         overlay?.place(on: overlayScreen, corner: overlayCorner, scale: overlayScale)
-        annotation?.cover(overlayScreen)
+        annotation?.coverAllScreens()
     }
 
     // MARK: 全体で効くショートカット (Stream Deck の「ホットキー」から使う)
@@ -1036,9 +1229,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         [
             ("R", kVK_ANSI_R, "録画の開始・停止", { [weak self] in self?.recordToggled() }),
             ("P", kVK_ANSI_P, "人物を画面に表示・非表示", { [weak self] in self?.toggleOverlay() }),
-            ("C", kVK_ANSI_C, "手書きを全部消す", { [weak self] in self?.annotation.view.clear() }),
+            ("C", kVK_ANSI_C, "手書きを全部消す", { [weak self] in self?.annotation.clear() }),
             ("D", kVK_ANSI_D, "ペン (描画モード) のオン・オフ", { [weak self] in self?.togglePen() }),
             ("K", kVK_ANSI_K, "ペンの色を次の色へ", { [weak self] in self?.nextPenColor() }),
+            ("F", kVK_ANSI_F, "全画面出力の表示・非表示", { [weak self] in self?.toggleOutput() }),
         ]
     }
 
@@ -1167,9 +1361,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         annotationTimer?.invalidate()
         annotationTimer = nil
         annotation.setDrawing(false)
-        guard on else { annotation.orderOut(nil); return }
-        annotation.cover(overlayScreen)
-        annotation.orderFrontRegardless()
+        guard on else { annotation.orderOut(); return }
+        annotation.coverAllScreens()
+        annotation.orderFront()
         // キーの状態を見て描画モードを切り替える。NSEvent.modifierFlags は
         // 他のアプリが前面でも読めて、アクセシビリティの許可も要らない
         var frontCount = 0
@@ -1183,12 +1377,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let now = Date()
             if down && !wasDown {
                 pressStart = now
-                strokesAtPress = self.annotation.view.strokes.count
+                strokesAtPress = self.annotation.strokeCount
             } else if !down && wasDown {
                 let isTap = now.timeIntervalSince(pressStart) < 0.3
-                    && self.annotation.view.strokes.count == strokesAtPress
+                    && self.annotation.strokeCount == strokesAtPress
                 if isTap && pressStart.timeIntervalSince(lastTap) < 0.4 {
-                    self.annotation.view.clear()
+                    self.annotation.clear()
                     lastTap = .distantPast
                 } else {
                     lastTap = isTap ? now : .distantPast
@@ -1196,10 +1390,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             wasDown = down
             self.annotation.setDrawing(down || self.penLatched)
-            self.annotation.view.tick()
+            self.annotation.tick()
             // 定期的に最前面へ戻す (1 秒ごと)
             frontCount += 1
-            if frontCount >= 60 { frontCount = 0; self.annotation.orderFrontRegardless() }
+            if frontCount >= 60 { frontCount = 0; self.annotation.orderFront() }
         }
         // ドラッグ中 (イベント追跡中) も止まらないよう common モードで回す
         RunLoop.main.add(timer, forMode: .common)
@@ -1214,22 +1408,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func drawKeyChanged(_ sender: NSPopUpButton) { drawKeyIndex = sender.indexOfSelectedItem }
     @objc func penColorChanged(_ sender: NSPopUpButton) {
         penColorIndex = sender.indexOfSelectedItem
-        annotation.view.color = penColors[penColorIndex].color
+        annotation.color = penColors[penColorIndex].color
     }
     @objc func penWidthChanged(_ sender: NSSlider) {
         penWidth = sender.doubleValue
-        annotation.view.lineWidth = CGFloat(penWidth)
+        annotation.lineWidth = CGFloat(penWidth)
     }
     @objc func fadeChanged(_ sender: NSPopUpButton) {
         fadeIndex = sender.indexOfSelectedItem
-        annotation.view.fadeAfter = fadeTimes[fadeIndex].seconds
+        annotation.fadeAfter = fadeTimes[fadeIndex].seconds
     }
-    @objc func clearAnnotation() { annotation.view.clear() }
+    @objc func clearAnnotation() { annotation.clear() }
 
     @objc func overlayToggled(_ sender: NSButton) {
         overlayOn = sender.state == .on
         placeOverlay()
-        overlay.setVisible(overlayOn)
+        updateOverlayVisibility()
     }
     @objc func cornerChanged(_ sender: NSPopUpButton) {
         overlayCorner = .init(rawValue: sender.indexOfSelectedItem) ?? .bottomRight
@@ -1240,6 +1434,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         placeOverlay()
     }
     @objc func screenChanged(_ sender: NSPopUpButton) {
+        defer { updateOverlayVisibility() }
         overlayScreenName = sender.titleOfSelectedItem
         placeOverlay()
     }
