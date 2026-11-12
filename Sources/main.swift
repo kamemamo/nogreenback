@@ -266,26 +266,35 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
             cutout = cutout.transformed(by: CGAffineTransform(scaleX: -1, y: 1)
                 .translatedBy(x: -extent.width, y: 0))
         }
+        // 「人物」がオフなら、人物を出さない (背景映像がないときは透明になる)
+        if !settings.showPerson { cutout = CIImage(color: .clear).cropped(to: extent) }
         source = cutout
 
-        // 背景映像があれば、画面を埋めるように拡大して敷き (はみ出した分は切る)、
         // 人物は「位置」「大きさ」に合わせて小さくして隅に置く
+        let corner = OverlayWindow.Corner(rawValue: settings.pipCorner) ?? .bottomRight
+        let ps = CGFloat(settings.pipScale)
+        let pw = extent.width * ps, ph = extent.height * ps
+        let px = (corner == .bottomRight || corner == .topRight) ? extent.width - pw : 0
+        let py = (corner == .bottomRight || corner == .bottomLeft) ? 0 : extent.height - ph   // 左下原点
+        let person = cutout.transformed(by: CGAffineTransform(scaleX: ps, y: ps)
+            .concatenating(CGAffineTransform(translationX: px, y: py)))
+        // プレビューと全画面出力に出す映像
+        var display: CIImage
         if let bg = background.latestImage {
+            // 背景映像は画面を埋めるように拡大して敷く (はみ出した分は切る)
             let be = bg.extent
             let s = max(extent.width / be.width, extent.height / be.height)
             let tx = (extent.width - be.width * s) / 2 - be.minX * s
             let ty = (extent.height - be.height * s) / 2 - be.minY * s
             let fitted = bg.transformed(by: CGAffineTransform(scaleX: s, y: s)
                 .concatenating(CGAffineTransform(translationX: tx, y: ty)))
-            let corner = OverlayWindow.Corner(rawValue: settings.pipCorner) ?? .bottomRight
-            let ps = CGFloat(settings.pipScale)
-            let w = extent.width * ps, h = extent.height * ps
-            let px = (corner == .bottomRight || corner == .topRight) ? extent.width - w : 0
-            let py = (corner == .bottomRight || corner == .bottomLeft) ? 0 : extent.height - h   // 左下原点
-            let person = cutout.transformed(by: CGAffineTransform(scaleX: ps, y: ps)
-                .concatenating(CGAffineTransform(translationX: px, y: py)))
-            source = settings.showPerson ? person.composited(over: fitted).cropped(to: extent)
-                                         : fitted.cropped(to: extent)
+            display = person.composited(over: fitted).cropped(to: extent)
+            source = display
+        } else {
+            // 背景なし: Syphon には人物を元の大きさで送り (OBS 側で配置する)、
+            // プレビューと全画面出力では、背景ありのときと同じ位置・大きさにする
+            // (透明な下地を敷いて、映像の大きさを元のままにする)
+            display = person.composited(over: CIImage(color: .clear).cropped(to: extent)).cropped(to: extent)
         }
 
         // 3) テクスチャに描画して Syphon 送出
@@ -307,7 +316,7 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
                                    flipped: false)
         cb.commit()
 
-        previewLock.lock(); _latestImage = source; _latestCutout = cutout; previewLock.unlock()
+        previewLock.lock(); _latestImage = display; _latestCutout = cutout; previewLock.unlock()
 
         frameCount += 1
         let now = CACurrentMediaTime()
@@ -627,6 +636,59 @@ final class Annotations {
 
 // MARK: - アプリ本体
 
+/// 上部のオン・オフボタン。背景を自分で塗る
+/// (標準のボタンは、全画面出力などが前に出てウィンドウが非アクティブになると、オンの色が消えてしまう)
+final class ToggleButton: NSButton {
+    /// オンのときの色
+    var onColor: NSColor = .controlAccentColor { didSet { needsDisplay = true } }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        isBordered = false
+        wantsLayer = true
+        font = .systemFont(ofSize: 13)
+        setButtonType(.pushOnPushOff)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    convenience init(title: String, target: AnyObject?, action: Selector?) {
+        self.init(frame: .zero)
+        self.title = title
+        self.target = target
+        self.action = action
+    }
+
+    override var title: String { didSet { needsDisplay = true } }
+    override var state: NSControl.StateValue { didSet { needsDisplay = true } }
+    override var isHighlighted: Bool { didSet { needsDisplay = true } }
+    override var isEnabled: Bool { didSet { needsDisplay = true } }
+    override var intrinsicContentSize: NSSize {
+        let w = (title as NSString).size(withAttributes: [.font: font ?? .systemFont(ofSize: 13)]).width
+        return NSSize(width: ceil(w) + 28, height: 30)
+    }
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        let on = state == .on
+        var fill = on ? onColor : NSColor.labelColor.withAlphaComponent(0.08)
+        if isHighlighted { fill = on ? onColor.blended(withFraction: 0.2, of: .black) ?? onColor
+                                     : NSColor.labelColor.withAlphaComponent(0.18) }
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = fill.cgColor
+        }
+        layer?.cornerRadius = bounds.height / 2
+        let color: NSColor = !isEnabled ? .tertiaryLabelColor : on ? .white : .labelColor
+        let style = NSMutableParagraphStyle()
+        style.alignment = .center
+        attributedTitle = NSAttributedString(string: title, attributes: [
+            .font: font ?? .systemFont(ofSize: 13), .foregroundColor: color, .paragraphStyle: style,
+        ])
+    }
+}
+
+/// 上から下へ並べるための、座標が上から始まるビュー (サイドバーのスクロール用)
+final class FlippedView: NSView { override var isFlipped: Bool { true } }
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let settings = Settings()
     var processor: Processor!
@@ -656,6 +718,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         get { UserDefaults.standard.bool(forKey: "overlayOn") }
         set { UserDefaults.standard.set(newValue, forKey: "overlayOn") }
     }
+    /// 人物を出すか (全画面出力・プレビュー・Syphon・画面に重ねる表示のすべて)
+    var personOn: Bool {
+        get { UserDefaults.standard.object(forKey: "personOn") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "personOn") }
+    }
+    var personButton = NSButton()
     var overlayCorner: OverlayWindow.Corner {
         get { .init(rawValue: UserDefaults.standard.integer(forKey: "overlayCorner")) ?? .bottomRight }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "overlayCorner") }
@@ -666,7 +734,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     // 画面録画
     var recorder: AnyObject?   // ScreenRecorder (macOS 12.3 以降)
-    var recordButton = NSButton()
+    var recordButton = ToggleButton()
     var recordLabel = NSTextField(labelWithString: "")
     var recordStart = Date()
     var recordTimer: Timer?
@@ -761,7 +829,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var annotationCheck = NSButton()
     var colorPopup = NSPopUpButton()
     /// Stream Deck などから切り替える「ペン」状態 (キーを押していなくても描ける)
-    var penLatched = false
+    var penLatched = false {
+        didSet { penButton.state = penLatched ? .on : .off }
+    }
+    var penButton = NSButton()
+    /// 「切り抜きの調整」を開いておくか
+    var tuningOpen: Bool {
+        get { UserDefaults.standard.bool(forKey: "tuningOpen") }
+        set { UserDefaults.standard.set(newValue, forKey: "tuningOpen") }
+    }
     var lastScreenCount = NSScreen.screens.count
     var hotKeys: HotKeys?
     let drawKeys: [(title: String, flags: NSEvent.ModifierFlags)] = [
@@ -835,10 +911,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: UI
 
     func buildUI() {
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1120, height: 680),
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1240, height: 760),
                           styleMask: [.titled, .closable, .resizable, .miniaturizable],
                           backing: .buffered, defer: false)
-        window.title = "NoGreenBack — Syphon: \"NoGreenBack\""
+        window.title = "NoGreenBack"
+        window.subtitle = "Syphon: NoGreenBack"
+        window.contentMinSize = NSSize(width: 900, height: 560)
         // メニューバーのある画面 (主ディスプレイ) の中央に出す。
         // center() だと、液晶タブレットなど別の画面に出ることがある
         let home = (NSScreen.screens.first ?? NSScreen.main)?.visibleFrame ?? .zero
@@ -866,12 +944,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let deflicker = NSSlider(value: settings.deflicker, minValue: 0, maxValue: 1,
                                  target: self, action: #selector(deflickerChanged(_:)))
-        deflicker.widthAnchor.constraint(equalToConstant: 110).isActive = true
         deflicker.toolTip = "照明のフリッカーによる画面全体の明滅をならします (横じまは消せません)"
 
         let feather = NSSlider(value: settings.feather, minValue: 0, maxValue: 6,
                                target: self, action: #selector(featherChanged(_:)))
-        feather.widthAnchor.constraint(equalToConstant: 110).isActive = true
 
         let mirror = NSButton(checkboxWithTitle: "左右反転", target: self, action: #selector(mirrorChanged(_:)))
         let flip = NSButton(checkboxWithTitle: "上下反転", target: self, action: #selector(flipChanged(_:)))
@@ -881,43 +957,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let smoothing = NSSlider(value: settings.smoothing, minValue: 0, maxValue: 1,
                                  target: self, action: #selector(smoothingChanged(_:)))
-        smoothing.widthAnchor.constraint(equalToConstant: 140).isActive = true
         smoothing.toolTip = "上げるほど輪郭のちらつきが減ります。上げすぎると動いたときに残像が出ます"
         let tighten = NSSlider(value: settings.tighten, minValue: 0, maxValue: 1,
                                target: self, action: #selector(tightenChanged(_:)))
-        tighten.widthAnchor.constraint(equalToConstant: 140).isActive = true
         tighten.toolTip = "上げるほど半透明の縁 (背景のにじみ) が減り、輪郭がくっきりします"
 
-        let bar = NSStackView(views: [
-            NSTextField(labelWithString: "カメラ"), cameraPopup,
-            NSTextField(labelWithString: "品質"), quality,
-            NSTextField(labelWithString: "フレームレート"), fpsPopup,
-            mirror, flip, straight, NSView(), fpsLabel,
-        ])
         let hold = NSSlider(value: settings.hold, minValue: 0, maxValue: 1,
                             target: self, action: #selector(holdChanged(_:)))
-        hold.widthAnchor.constraint(equalToConstant: 120).isActive = true
         hold.toolTip = "上げるほど、手をかざしたときなどに体の一部が一瞬消える現象を抑えます。上げすぎると、移動した後に元の位置がうっすら残ります"
 
-        let bar2 = NSStackView(views: [
-            NSTextField(labelWithString: "ちらつき抑制"), smoothing,
-            NSTextField(labelWithString: "消失の保持"), hold,
-            NSTextField(labelWithString: "境界の締まり"), tighten,
-            NSTextField(labelWithString: "境界ぼかし"), feather,
-            NSTextField(labelWithString: "明るさ安定化"), deflicker, NSView(),
-        ])
-        for b in [bar, bar2] {
-            b.orientation = .horizontal
-            b.spacing = 8
-            b.edgeInsets = NSEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
-        }
         fpsLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
 
         // 3 段目: 画面に重ねる表示
         overlay = OverlayWindow(processor: processor)
-        overlayCheck = NSButton(checkboxWithTitle: "画面に表示", target: self, action: #selector(overlayToggled(_:)))
+        overlayCheck = toolbarToggle("画面に表示", #selector(overlayToggled(_:)))
         overlayCheck.state = overlayOn ? .on : .off
-        overlayCheck.toolTip = "OBS を使わずに、人物を画面の隅に常に手前で表示します (クリックは後ろのアプリに届きます)"
+        overlayCheck.toolTip = "切り抜いた人物を、デスクトップの隅に常に手前で重ねます (クリックは後ろのアプリに届きます)"
+        personButton = toolbarToggle("人物", #selector(personToggled(_:)))
+        personButton.state = personOn ? .on : .off
+        personButton.toolTip = "人物を出し入れします (全画面出力・プレビュー・Syphon・画面に重ねる表示のすべて)。オフにすると背景だけになります。\(HotKeys.modifierSymbols)P"
         let cornerPopup = NSPopUpButton()
         cornerPopup.addItems(withTitles: OverlayWindow.Corner.allCases.map(\.title))
         cornerPopup.selectItem(at: overlayCorner.rawValue)
@@ -925,7 +983,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         cornerPopup.action = #selector(cornerChanged(_:))
         let sizeSlider = NSSlider(value: overlayScale, minValue: 0.15, maxValue: 0.8,
                                   target: self, action: #selector(overlaySizeChanged(_:)))
-        sizeSlider.widthAnchor.constraint(equalToConstant: 140).isActive = true
         sizeSlider.toolTip = "画面の幅に対する大きさ"
         screenPopup.target = self
         screenPopup.action = #selector(screenChanged(_:))
@@ -934,8 +991,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                                object: nil, queue: .main) { [weak self] _ in
             self?.screensChanged()
         }
-        recordButton = NSButton(title: "● 録画開始", target: self, action: #selector(recordToggled))
-        recordButton.toolTip = "「録画する画面」を録画して、ムービーフォルダに保存します (このウィンドウは映りません)。⌃⌥⌘R でも開始・停止できます"
+        recordButton = ToggleButton(title: "● 録画開始", target: self, action: #selector(recordToggled))
+        recordButton.onColor = .systemRed
+        recordButton.toolTip = "「録画する画面」を録画して、ムービーフォルダに保存します (このウィンドウは映りません)。\(HotKeys.modifierSymbols)R でも開始・停止できます"
+        // 「録画開始」と「録画停止」で幅が変わらないよう、広いほうに合わせる
+        var recordWidth: CGFloat = 0
+        for t in ["■ 録画停止", "● 録画開始"] {
+            recordButton.title = t
+            recordWidth = max(recordWidth, recordButton.intrinsicContentSize.width)
+        }
+        recordButton.widthAnchor.constraint(equalToConstant: recordWidth).isActive = true
         micPopup.target = self
         micPopup.action = #selector(micChanged(_:))
         micPopup.toolTip = "録画に入れるマイクの音声"
@@ -982,20 +1047,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         recordLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         recordLabel.textColor = .systemRed
+        // 経過時間の欄は幅を固定する (数字が変わるたびに右のボタンが動かないように)
+        recordLabel.widthAnchor.constraint(equalToConstant: 64).isActive = true
+        recordLabel.lineBreakMode = .byClipping
         if #unavailable(macOS 12.3) {
             recordButton.isEnabled = false
             recordButton.toolTip = "画面録画には macOS 12.3 以降が必要です"
         }
-        let bar3 = NSStackView(views: [
-            overlayCheck,
-            NSTextField(labelWithString: "位置"), cornerPopup,
-            NSTextField(labelWithString: "大きさ"), sizeSlider,
-            NSTextField(labelWithString: "表示する画面"), screenPopup, NSView(),
-            recordButton, NSTextField(labelWithString: "マイク"), micPopup, micLevel, recordLabel,
-        ])
-        bar3.orientation = .horizontal
-        bar3.spacing = 8
-        bar3.edgeInsets = NSEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
         placeOverlay()
         updateOverlayVisibility()
 
@@ -1005,9 +1063,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         annotation.lineWidth = CGFloat(penWidth)
         annotation.fadeAfter = fadeTimes[fadeIndex].seconds
         annotation.coverAllScreens()
-        annotationCheck = NSButton(checkboxWithTitle: "手書き", target: self, action: #selector(annotationToggled(_:)))
+        annotationCheck = toolbarToggle("手書き", #selector(annotationToggled(_:)))
         annotationCheck.state = annotationOn ? .on : .off
-        annotationCheck.toolTip = "選んだキーを押している間だけ、画面にペンで書けます。離すと後ろのアプリを操作できます。⌃⌥⌘D でペンを押しっぱなし状態にできます"
+        annotationCheck.toolTip = "選んだキーを押している間だけ、画面にペンで書けます。離すと後ろのアプリを操作できます"
+        penButton = toolbarToggle("ペン固定", #selector(penButtonClicked(_:)))
+        penButton.toolTip = "キーを押さなくても描ける状態にします。オンの間は後ろのアプリをクリックできません。\(HotKeys.modifierSymbols)D"
         let keyPopup = NSPopUpButton()
         keyPopup.addItems(withTitles: drawKeys.map(\.title))
         keyPopup.selectItem(at: drawKeyIndex)
@@ -1020,48 +1080,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         colorPopup.action = #selector(penColorChanged(_:))
         let widthSlider = NSSlider(value: penWidth, minValue: 2, maxValue: 20,
                                    target: self, action: #selector(penWidthChanged(_:)))
-        widthSlider.widthAnchor.constraint(equalToConstant: 100).isActive = true
         let fadePopup = NSPopUpButton()
         fadePopup.addItems(withTitles: fadeTimes.map(\.title))
         fadePopup.selectItem(at: fadeIndex)
         fadePopup.target = self
         fadePopup.action = #selector(fadeChanged(_:))
         let clearButton = NSButton(title: "消去", target: self, action: #selector(clearAnnotation))
-        let hint = NSTextField(labelWithString: "キーを押しながらドラッグで描く／キーを2回押すか、押しながら右クリックで全消去")
-        hint.textColor = .secondaryLabelColor
-        let bar4 = NSStackView(views: [
-            annotationCheck,
-            NSTextField(labelWithString: "描くキー"), keyPopup,
-            NSTextField(labelWithString: "色"), colorPopup,
-            NSTextField(labelWithString: "太さ"), widthSlider,
-            fadePopup, clearButton, hint, NSView(),
-        ])
-        bar4.orientation = .horizontal
-        bar4.spacing = 8
-        bar4.edgeInsets = NSEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
+        clearButton.controlSize = .large
+        clearButton.toolTip = "手書きを全部消します。\(HotKeys.modifierSymbols)C でも消せます"
         setAnnotationVisible(annotationOn)
 
         // 5 段目: 背景映像と全画面出力
         bgPopup.target = self
         bgPopup.action = #selector(backgroundChanged(_:))
         bgPopup.toolTip = "USB キャプチャーなどの映像を人物の後ろに敷きます"
-        outputCheck = NSButton(checkboxWithTitle: "全画面で出す", target: self, action: #selector(outputToggled(_:)))
+        outputCheck = toolbarToggle("全画面で出す", #selector(outputToggled(_:)))
         outputCheck.toolTip = "合成した映像を、選んだ画面いっぱいに表示します。Esc か \(HotKeys.modifierSymbols)F で閉じます"
         outputScreenPopup.target = self
         outputScreenPopup.action = #selector(outputScreenChanged(_:))
-        let outputHint = NSTextField(labelWithString: "Esc か \(HotKeys.modifierSymbols)F で閉じる")
-        outputHint.textColor = .secondaryLabelColor
-        outputHint.font = .systemFont(ofSize: 11)
         recordScreenPopup.target = self
         recordScreenPopup.action = #selector(recordScreenChanged(_:))
         recordScreenPopup.toolTip = "「● 録画開始」で録画する画面"
-        let bar5 = NSStackView(views: [
-            NSTextField(labelWithString: "背景映像"), bgPopup,
-            outputCheck, NSTextField(labelWithString: "出す画面"), outputScreenPopup, outputHint, NSView(),
-        ])
-        bar5.orientation = .horizontal
-        bar5.spacing = 8
-        bar5.edgeInsets = NSEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
         refreshScreens()
 
         // 6 段目: 録画の設定 (数値で選ぶ)
@@ -1085,36 +1124,130 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                              RecordSettings.fpsChoices.firstIndex(of: rs.fps) ?? 2,
                              #selector(recordFPSChanged(_:)), "最大フレームレート (画面が動かない間はコマ数が減ります)")
         let codecPopup = popup(["H.264", "HEVC (H.265)"], rs.hevc ? 1 : 0,
-                               #selector(recordCodecChanged(_:)), "HEVC は同じ画質でファイルが約半分。古い Mac や一部の編集ソフトでは開けないことがあります")
+                               #selector(recordCodecChanged(_:)), "同じ Mbps なら HEVC のほうが高画質 (ファイルの大きさは Mbps で決まります)。古い Mac や一部の編集ソフトでは開けないことがあります")
         let audioPopup = popup(RecordSettings.audioKbpsChoices.map { "\($0) kbps" },
                                RecordSettings.audioKbpsChoices.firstIndex(of: rs.audioKbps) ?? 2,
                                #selector(recordAudioChanged(_:)), "音声 (AAC・48kHz・モノラル) のビットレート")
         recordSizeLabel.textColor = .secondaryLabelColor
         recordSizeLabel.font = .systemFont(ofSize: 11)
         updateRecordSizeLabel()
-        let bar6 = NSStackView(views: [
-            NSTextField(labelWithString: "録画する画面"), recordScreenPopup,
-            NSTextField(labelWithString: "映像"), mbpsPopup,
-            NSTextField(labelWithString: "長辺"), sizePopup,
-            recFPSPopup, codecPopup,
-            NSTextField(labelWithString: "音声"), audioPopup,
-            recordSizeLabel, NSView(),
-        ])
-        bar6.orientation = .horizontal
-        bar6.spacing = 8
-        bar6.edgeInsets = NSEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
+        helpButton = NSButton(title: "", target: self, action: #selector(showShortcuts(_:)))
+        helpButton.bezelStyle = .helpButton
+        helpButton.toolTip = "ショートカットの一覧 (⌘/)"
 
-        let root = NSStackView(views: [bar, bar2, bar3, bar4, bar5, bar6, preview])
+        // 上部: 本番中に触るボタンだけを並べる (オンのときは色が付く)
+        let toolbar = NSStackView(views: [
+            helpButton, toolbarSeparator(),
+            personButton, outputCheck, overlayCheck, toolbarSeparator(),
+            annotationCheck, penButton, clearButton, NSView(),
+            recordButton, recordLabel, fpsLabel,
+        ])
+        toolbar.orientation = .horizontal
+        toolbar.spacing = 8
+        toolbar.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
+        fpsLabel.textColor = .secondaryLabelColor
+        // フレームレートも幅を固定して右端にそろえる (数字が変わってもボタンが動かないように)
+        fpsLabel.alignment = .right
+        fpsLabel.widthAnchor.constraint(equalToConstant: 64).isActive = true
+
+        // 右側: 設定を見出しごとに縦に並べる
+        // 反転とストレートα は 1 行に並べ、右端をポップアップにそろえる
+        let mirrors = NSStackView()
+        for v in [mirror, flip, straight] { mirrors.addView(v, in: .trailing) }
+        mirrors.spacing = 14
+        // 映像と音声のビットレートは 1 行に並べる
+        let rateRow = NSStackView(views: [mbpsPopup, NSTextField(labelWithString: "音声"), audioPopup])
+        rateRow.spacing = 6
+        mbpsPopup.widthAnchor.constraint(equalToConstant: 92).isActive = true
+        audioPopup.widthAnchor.constraint(equalToConstant: 104).isActive = true
+        let micRow = NSStackView(views: [micPopup, micLevel])
+        micRow.spacing = 6
+        micPopup.widthAnchor.constraint(equalToConstant: sideControlWidth - 76).isActive = true
+        let tuning = sideGrid([
+            ("ちらつき抑制", smoothing), ("消失の保持", hold), ("境界の締まり", tighten),
+            ("境界ぼかし", feather), ("明るさ安定化", deflicker),
+        ])
+        tuning.isHidden = !tuningOpen
+        let sections: [NSView] = [
+            sectionHeader("カメラ"),
+            sideGrid([("カメラ", cameraPopup), ("品質", quality), ("フレームレート", fpsPopup)]),
+            mirrors,
+            collapsibleSection("切り抜きの調整", content: tuning),
+            sectionHeader("人物の位置と大きさ"),
+            sideGrid([("位置", cornerPopup), ("大きさ", sizeSlider), ("表示する画面", screenPopup)]),
+            sectionHeader("背景と全画面出力"),
+            sideGrid([("背景映像", bgPopup), ("出す画面", outputScreenPopup)]),
+            sectionHeader("手書き"),
+            sideGrid([("描くキー", keyPopup), ("色", colorPopup), ("太さ", widthSlider),
+                      ("線を消す", fadePopup)]),
+            sectionHeader("録画"),
+            sideGrid([("録画する画面", recordScreenPopup), ("マイク", micRow), ("映像", rateRow),
+                      ("長辺", sizePopup), ("フレームレート", recFPSPopup), ("形式", codecPopup)]),
+            recordSizeLabel,
+        ]
+        let side = NSStackView(views: sections)
+        side.orientation = .vertical
+        side.alignment = .leading
+        side.spacing = 6
+        side.edgeInsets = NSEdgeInsets(top: 4, left: 14, bottom: 16, right: 14)
+        mirrors.trailingAnchor.constraint(equalTo: side.trailingAnchor, constant: -6).isActive = true
+        for v in [mirror, flip, straight] { v.font = .systemFont(ofSize: NSFont.systemFontSize) }
+        // 見出しの上は少し空ける
+        for (k, v) in sections.enumerated() where k > 0 && v.identifier?.rawValue == "header" {
+            side.setCustomSpacing(16, after: sections[k - 1])
+        }
+        let doc = FlippedView()
+        doc.translatesAutoresizingMaskIntoConstraints = false
+        side.translatesAutoresizingMaskIntoConstraints = false
+        doc.addSubview(side)
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.drawsBackground = false
+        scroll.documentView = doc
+        NSLayoutConstraint.activate([
+            side.topAnchor.constraint(equalTo: doc.topAnchor),
+            side.leadingAnchor.constraint(equalTo: doc.leadingAnchor),
+            side.trailingAnchor.constraint(equalTo: doc.trailingAnchor),
+            side.bottomAnchor.constraint(equalTo: doc.bottomAnchor),
+            doc.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
+            doc.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
+            doc.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+            scroll.widthAnchor.constraint(equalToConstant: sideControlWidth + 140),
+        ])
+        let sideBack = NSVisualEffectView()
+        sideBack.material = .sidebar
+        sideBack.blendingMode = .behindWindow
+        sideBack.addSubview(scroll)
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            scroll.topAnchor.constraint(equalTo: sideBack.topAnchor),
+            scroll.bottomAnchor.constraint(equalTo: sideBack.bottomAnchor),
+            scroll.leadingAnchor.constraint(equalTo: sideBack.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: sideBack.trailingAnchor),
+        ])
+
+        let separator = NSBox()
+        separator.boxType = .separator
+        let main = NSStackView(views: [preview, sideBack])
+        main.orientation = .horizontal
+        main.spacing = 0
+        main.alignment = .top
+        main.distribution = .fill
+        preview.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        preview.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        sideBack.setContentHuggingPriority(.required, for: .horizontal)
+        preview.heightAnchor.constraint(equalTo: main.heightAnchor).isActive = true
+        sideBack.heightAnchor.constraint(equalTo: main.heightAnchor).isActive = true
+
+        let root = NSStackView(views: [toolbar, separator, main])
         root.orientation = .vertical
         root.spacing = 0
         root.alignment = .leading
-        bar.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
-        bar2.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
-        bar3.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
-        bar4.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
-        bar5.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
-        bar6.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
-        preview.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        for v in [toolbar, separator, main] as [NSView] {
+            v.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        }
+        main.setContentHuggingPriority(.defaultLow, for: .vertical)
         window.contentView = root
         // 画面に重ねた表示が残っていても、メインウィンドウを閉じたら終了する
         NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification,
@@ -1122,6 +1255,78 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         registerHotKeys()
+    }
+
+    // MARK: 画面の部品
+
+    /// サイドバーのポップアップやスライダーの幅
+    let sideControlWidth: CGFloat = 232
+
+    /// 上部に並べる、押すとオン・オフが切り替わるボタン
+    func toolbarToggle(_ title: String, _ action: Selector) -> NSButton {
+        ToggleButton(title: title, target: self, action: action)
+    }
+
+    func toolbarSeparator() -> NSView {
+        let b = NSBox()
+        b.boxType = .separator
+        b.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        return b
+    }
+
+    func sectionHeader(_ title: String) -> NSTextField {
+        let t = NSTextField(labelWithString: title)
+        t.font = .boldSystemFont(ofSize: 13)
+        t.identifier = NSUserInterfaceItemIdentifier("header")
+        return t
+    }
+
+    /// 開け閉めできる見出しと中身 (あまり触らない設定をしまっておく)
+    func collapsibleSection(_ title: String, content: NSView) -> NSView {
+        let tri = NSButton(title: "", target: self, action: #selector(disclosureClicked(_:)))
+        tri.bezelStyle = .disclosure
+        tri.setButtonType(.pushOnPushOff)
+        tri.state = content.isHidden ? .off : .on
+        disclosureTargets[ObjectIdentifier(tri)] = content
+        let label = NSButton(title: title, target: tri, action: #selector(NSButton.performClick(_:)))
+        label.isBordered = false
+        label.font = .boldSystemFont(ofSize: 13)
+        label.contentTintColor = .labelColor
+        let row = NSStackView(views: [tri, label])
+        row.spacing = 2
+        let section = NSStackView(views: [row, content])
+        section.orientation = .vertical
+        section.alignment = .leading
+        section.spacing = 6
+        section.identifier = NSUserInterfaceItemIdentifier("header")
+        return section
+    }
+    var disclosureTargets: [ObjectIdentifier: NSView] = [:]
+    @objc func disclosureClicked(_ sender: NSButton) {
+        disclosureTargets[ObjectIdentifier(sender)]?.isHidden = sender.state == .off
+        tuningOpen = sender.state == .on
+    }
+
+    /// 左に名前、右に部品を揃えて並べる
+    func sideGrid(_ rows: [(String, NSView)]) -> NSGridView {
+        let g = NSGridView(views: rows.map { title, view -> [NSView] in
+            if view is NSPopUpButton || view is NSSlider {
+                view.widthAnchor.constraint(equalToConstant: sideControlWidth).isActive = true
+            }
+            return [NSTextField(labelWithString: title), view]
+        })
+        g.column(at: 0).xPlacement = .trailing
+        g.column(at: 0).width = 96
+        g.rowAlignment = .firstBaseline
+        g.rowSpacing = 6
+        g.columnSpacing = 8
+        return g
+    }
+
+    @objc func penButtonClicked(_ sender: NSButton) {
+        // togglePen が penLatched を反転させるので、押す前の状態に戻してから呼ぶ
+        sender.state = penLatched ? .on : .off
+        togglePen()
     }
 
     func showAlert(_ text: String) {
@@ -1373,9 +1578,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 全画面出力が同じ画面に出ている間は、重ねる表示を隠す (出力の中にもう人物が入っているので)
     func updateOverlayVisibility() {
         let covered = outputWindow != nil && outputScreen == overlayScreen
-        overlay?.setVisible(overlayOn && !covered)
-        // 背景映像に入れる人物も、「画面に表示」に合わせて出し入れする
-        settings.showPerson = overlayOn
+        overlay?.setVisible(overlayOn && personOn && !covered)
+        settings.showPerson = personOn
     }
 
     func placeOverlay() {
@@ -1391,7 +1595,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var hotKeyList: [(key: String, code: Int, title: String, action: () -> Void)] {
         [
             ("R", kVK_ANSI_R, "録画の開始・停止", { [weak self] in self?.recordToggled() }),
-            ("P", kVK_ANSI_P, "人物を画面に表示・非表示", { [weak self] in self?.toggleOverlay() }),
+            ("P", kVK_ANSI_P, "人物の表示・非表示", { [weak self] in self?.togglePerson() }),
             ("C", kVK_ANSI_C, "手書きを全部消す", { [weak self] in self?.annotation.clear() }),
             ("D", kVK_ANSI_D, "ペン (描画モード) のオン・オフ", { [weak self] in self?.togglePen() }),
             ("K", kVK_ANSI_K, "ペンの色を次の色へ", { [weak self] in self?.nextPenColor() }),
@@ -1404,6 +1608,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var failed: [String] = []
         for k in hotKeyList where !keys.register(keyCode: k.code, k.action) {
             failed.append("\(HotKeys.modifierSymbols)\(k.key)（\(k.title)）")
+            failedHotKeys.insert(k.key)
         }
         hotKeys = keys
         if !failed.isEmpty {
@@ -1411,9 +1616,78 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func toggleOverlay() {
-        overlayCheck.state = overlayCheck.state == .on ? .off : .on
-        overlayToggled(overlayCheck)
+    // MARK: ショートカット一覧
+
+    /// 他のアプリが使っていて登録できなかったキー
+    var failedHotKeys: Set<String> = []
+    var helpButton = NSButton()
+    var shortcutPopover: NSPopover?
+
+    @objc func showShortcuts(_ sender: Any?) {
+        if let p = shortcutPopover, p.isShown { p.close(); return }
+        func cell(_ text: String, bold: Bool = false, dim: Bool = false) -> NSTextField {
+            let t = NSTextField(labelWithString: text)
+            t.font = bold ? .systemFont(ofSize: 13, weight: .semibold) : .systemFont(ofSize: 13)
+            if dim { t.textColor = .secondaryLabelColor }
+            return t
+        }
+        func header(_ text: String) -> NSTextField {
+            let t = NSTextField(labelWithString: text)
+            t.font = .boldSystemFont(ofSize: 13)
+            return t
+        }
+        var rows: [[NSView]] = []
+        for k in hotKeyList {
+            let used = failedHotKeys.contains(k.key)
+            rows.append([cell("\(HotKeys.modifierSymbols) \(k.key)", bold: true, dim: used),
+                         cell(k.title + (used ? "（他のアプリが使用中のため使えません）" : ""), dim: used)])
+        }
+        let drawKey = drawKeys[drawKeyIndex].title.components(separatedBy: " ").first ?? ""
+        let note = NSTextField(wrappingLabelWithString: "上の 6 つは、他のアプリを操作中でも効きます。Stream Deck では「ホットキー」アクションにこの組み合わせを設定します。")
+        note.font = .systemFont(ofSize: 11)
+        note.textColor = .secondaryLabelColor
+        note.preferredMaxLayoutWidth = 400
+        // 見出しも説明も 1 つの表に入れて、左右の位置をそろえる
+        let grid = NSGridView(numberOfColumns: 2, rows: 0)
+        func addMerged(_ v: NSView, space: CGFloat) {
+            let r = grid.addRow(with: [v, NSGridCell.emptyContentView])
+            r.mergeCells(in: NSRange(location: 0, length: 2))
+            r.topPadding = space
+        }
+        addMerged(header("どこからでも使えるショートカット"), space: 0)
+        rows.forEach { grid.addRow(with: $0) }
+        addMerged(header("NoGreenBack の操作"), space: 12)
+        for r in [[cell("\(drawKey) を押しながら", bold: true), cell("ドラッグで描く（手書きがオンのとき）")],
+                  [cell("\(drawKey) を 2 回", bold: true), cell("手書きを全部消す")],
+                  [cell("\(drawKey) ＋ 右クリック", bold: true), cell("手書きを全部消す")],
+                  [cell("Esc", bold: true), cell("全画面出力を閉じる（全画面出力を操作中のとき）")],
+                  [cell("⌘ Q", bold: true), cell("終了")]] { grid.addRow(with: r) }
+        addMerged(note, space: 12)
+        grid.rowSpacing = 6
+        grid.columnSpacing = 20
+        grid.translatesAutoresizingMaskIntoConstraints = false
+        let box = NSView()
+        box.addSubview(grid)
+        NSLayoutConstraint.activate([
+            grid.topAnchor.constraint(equalTo: box.topAnchor, constant: 16),
+            grid.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -16),
+            grid.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 18),
+            grid.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -18),
+        ])
+        let vc = NSViewController()
+        vc.view = box
+        vc.preferredContentSize = box.fittingSize
+        let p = NSPopover()
+        p.behavior = .transient
+        p.contentViewController = vc
+        shortcutPopover = p
+        window.makeKeyAndOrderFront(nil)
+        p.show(relativeTo: helpButton.bounds, of: helpButton, preferredEdge: .maxY)
+    }
+
+    func togglePerson() {
+        personButton.state = personOn ? .off : .on
+        personToggled(personButton)
     }
 
     func togglePen() {
@@ -1488,6 +1762,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func recordToggled() {
         guard #available(macOS 12.3, *) else { return }
+        // 押した時点では色を変えず、録画が始まった・止まったときに合わせる
+        recordButton.state = recorder != nil ? .on : .off
         recordButton.isEnabled = false
         if let rec = recorder as? ScreenRecorder {
             // 停止 (MP4 への詰め替えが終わるまで「保存中」と出す)
@@ -1500,6 +1776,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.recordTimer?.invalidate()
                 self.recordLabel.stringValue = ""
                 self.recordButton.title = "● 録画開始"
+                self.recordButton.state = .off
                 self.recordButton.isEnabled = true
                 if let url { NSWorkspace.shared.activateFileViewerSelecting([url]) }
                 else { self.showAlert("画面に変化がなかったため、録画は保存されませんでした。") }
@@ -1524,6 +1801,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // 録画中はメーター用にマイクを開かない (Bluetooth マイクは 2 か所から開くと途切れる)
                     self.micMeter.stop()
                     self.recordButton.title = "■ 録画停止"
+                    self.recordButton.state = .on
                     self.recordStart = Date()
                     self.recordLabel.stringValue = "0:00"
                     let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
@@ -1608,6 +1886,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     @objc func clearAnnotation() { annotation.clear() }
 
+    @objc func personToggled(_ sender: NSButton) {
+        personOn = sender.state == .on
+        updateOverlayVisibility()
+    }
     @objc func overlayToggled(_ sender: NSButton) {
         overlayOn = sender.state == .on
         placeOverlay()
@@ -1657,6 +1939,13 @@ mainMenu.addItem(appItem)
 let appMenu = NSMenu()
 appMenu.addItem(withTitle: "NoGreenBack を終了", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 appItem.submenu = appMenu
+let helpItem = NSMenuItem()
+mainMenu.addItem(helpItem)
+let helpMenu = NSMenu(title: "ヘルプ")
+let shortcutItem = helpMenu.addItem(withTitle: "ショートカットの一覧", action: #selector(AppDelegate.showShortcuts(_:)), keyEquivalent: "/")
+shortcutItem.target = delegate
+helpItem.submenu = helpMenu
 app.mainMenu = mainMenu
+app.helpMenu = helpMenu
 
 app.run()
