@@ -699,6 +699,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         set { UserDefaults.standard.set(newValue, forKey: "outputScreen") }
     }
     let micMeter = MicMeter()
+    var micCheckTick = 0
     let micLevel = NSLevelIndicator()
     var micLevelTimer: Timer?
     var micDevices: [AVCaptureDevice] = []
@@ -901,6 +902,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // 減るときはゆっくり落とす (針がちらつかないように)
             let v = max(0, min(30, (db + 60) / 2))
             self.micLevel.doubleValue = v >= self.micLevel.doubleValue ? v : max(v, self.micLevel.doubleValue - 1.5)
+            // 約 2 秒ごとに、システムの入力が切り替わっていないか見る
+            self.micCheckTick += 1
+            if self.micCheckTick % 30 == 0 { self.followSystemMic() }
         }
         RunLoop.main.add(lt, forMode: .common)
         micLevelTimer = lt
@@ -1329,34 +1333,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         micDevices = AVCaptureDevice.DiscoverySession(deviceTypes: types, mediaType: .audio, position: .unspecified).devices
         micPopup.removeAllItems()
         micPopup.addItem(withTitle: "なし")
+        micPopup.addItem(withTitle: systemMicTitle)
         micPopup.addItems(withTitles: micDevices.map(\.localizedName))
         if !recordMic {
             micPopup.selectItem(at: 0)
-        } else if let i = micDevices.firstIndex(where: { $0.uniqueID == recordMicID }) ?? defaultMicIndex {
-            micPopup.selectItem(at: i + 1)
+        } else if let i = micDevices.firstIndex(where: { $0.uniqueID == recordMicID }) {
+            micPopup.selectItem(at: i + 2)
         } else {
-            micPopup.selectItem(at: 0)
+            // 「システムの設定に合わせる」、または選んでいたマイクが外れているとき
+            micPopup.selectItem(at: 1)
         }
         micMeter.start(selectedMic)
     }
 
-    /// 既定のマイクの位置 (選んだマイクが外されたとき用)
-    var defaultMicIndex: Int? {
-        let def = AVCaptureDevice.default(for: .audio)?.uniqueID
-        return micDevices.firstIndex { $0.uniqueID == def } ?? (micDevices.isEmpty ? nil : 0)
+    /// 「システムの設定に合わせる」の表示 (今使われるマイクの名前を添える)
+    var systemMicTitle: String {
+        "システムの設定（\(AVCaptureDevice.default(for: .audio)?.localizedName ?? "なし")）"
+    }
+
+    /// システムの入力 (サウンド設定) が変わっていたら、表示とメーターを合わせる
+    func followSystemMic() {
+        guard micPopup.indexOfSelectedItem == 1, micPopup.numberOfItems > 1 else { return }
+        let title = systemMicTitle
+        if micPopup.item(at: 1)?.title != title { micPopup.item(at: 1)?.title = title }
+        if micMeter.device?.uniqueID != selectedMic?.uniqueID { micMeter.start(selectedMic) }
     }
 
     @objc func micChanged(_ sender: NSPopUpButton) {
         let i = sender.indexOfSelectedItem
         recordMic = i > 0
-        if i > 0 { recordMicID = micDevices[i - 1].uniqueID }
+        recordMicID = i >= 2 ? micDevices[i - 2].uniqueID : nil   // nil = システムの設定に合わせる
         micMeter.start(selectedMic)
     }
 
     /// 録画に使うマイク (なしなら nil)
     var selectedMic: AVCaptureDevice? {
         let i = micPopup.indexOfSelectedItem
-        return i > 0 && i - 1 < micDevices.count ? micDevices[i - 1] : nil
+        if i == 1 { return AVCaptureDevice.default(for: .audio) }
+        return i >= 2 && i - 2 < micDevices.count ? micDevices[i - 2] : nil
     }
 
     @objc func recordToggled() {
@@ -1375,6 +1389,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.recordButton.isEnabled = true
                 if let url { NSWorkspace.shared.activateFileViewerSelecting([url]) }
                 else { self.showAlert("画面に変化がなかったため、録画は保存されませんでした。") }
+                if url != nil, rec.recordsAudio, rec.audioSamplesWritten == 0 {
+                    self.showAlert("マイクの音が届いていなかったため、録画には音が入っていません。\n「マイク」の選択と、右のメーターが動くかを確かめてください。")
+                }
             }
         } else {
             // 開始

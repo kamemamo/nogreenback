@@ -23,6 +23,10 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
     private var audioInput: AVAssetWriterInput?
     private var audioSession: AVCaptureSession?
     private var started = false
+    /// 書き込めた音のかたまりの数 (0 のままなら、マイクの音が届いていない)
+    private(set) var audioSamplesWritten = 0
+    /// マイクの音を録る設定だったか
+    private(set) var recordsAudio = false
     private(set) var url: URL?
 
     /// 失敗したときの通知 (メインスレッドで呼ぶ)
@@ -95,11 +99,23 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
                 audio.expectsMediaDataInRealTime = true
                 writer.add(audio)
                 audioInput = audio
+                recordsAudio = true
 
                 let session = AVCaptureSession()
                 let input = try AVCaptureDeviceInput(device: mic)
                 if session.canAddInput(input) { session.addInput(input) }
                 let output = AVCaptureAudioDataOutput()
+                // マイクごとに形式が違う (Bluetooth は 16kHz や 24kHz、仮想デバイスはステレオなど) ので、
+                // 48kHz・モノラルにそろえてから書き込む。そろえないと音が入らないことがある
+                output.audioSettings = [
+                    AVFormatIDKey: kAudioFormatLinearPCM,
+                    AVSampleRateKey: 48_000,
+                    AVNumberOfChannelsKey: 1,
+                    AVLinearPCMBitDepthKey: 32,
+                    AVLinearPCMIsFloatKey: true,
+                    AVLinearPCMIsNonInterleaved: false,
+                    AVLinearPCMIsBigEndianKey: false,
+                ]
                 output.setSampleBufferDelegate(self, queue: queue)
                 if session.canAddOutput(output) { session.addOutput(output) }
                 audioSession = session
@@ -196,7 +212,7 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
     func captureOutput(_ output: AVCaptureOutput, didOutput sb: CMSampleBuffer, from connection: AVCaptureConnection) {
         // 映像が始まる前の音は捨てる (始点を映像にそろえる)
         guard started, let audioInput, audioInput.isReadyForMoreMediaData else { return }
-        audioInput.append(sb)
+        if audioInput.append(sb) { audioSamplesWritten += 1 }
     }
 }
 
