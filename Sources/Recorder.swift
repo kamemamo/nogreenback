@@ -1,4 +1,4 @@
-// 画面録画: ScreenCaptureKit で画面を受け取り、AVAssetWriter で H.264 に圧縮して保存する
+// 画面録画: ScreenCaptureKit で画面を受け取り、AVAssetWriter で H.264 / HEVC に圧縮して保存する
 // OBS の「Hybrid MP4」と同じ考え方で、落ちても消えず、止めたら普通の MP4 になるようにする:
 //   録画中 … 2 秒ごとに区切って .mov に書き込む (アプリが落ちても、それまでの分は再生できる)
 //   停止時 … 再圧縮せずに .mp4 へ詰め替えて、.mov を消す
@@ -10,12 +10,28 @@ import AppKit
 import AVFoundation
 import ScreenCaptureKit
 
+/// 録画の設定 (メイン画面の「録画の設定」の段で選ぶ)
+struct RecordSettings {
+    /// 映像の平均ビットレート (Mbps)
+    var videoMbps = 8
+    /// 長辺の最大ピクセル数 (0 なら縮めずに画面の画素数のまま)
+    var maxLongSide = 1920
+    /// 最大フレームレート
+    var fps = 30
+    /// true なら HEVC (H.265)、false なら H.264
+    var hevc = false
+    /// 音声のビットレート (kbps)
+    var audioKbps = 128
+
+    static let videoMbpsChoices = [4, 6, 8, 10, 12, 16, 20, 30, 40]
+    static let maxLongSideChoices = [1280, 1920, 2560, 3840, 0]
+    static let fpsChoices = [24, 25, 30, 50, 60]
+    static let audioKbpsChoices = [64, 96, 128, 192, 256]
+}
+
 @available(macOS 12.3, *)
 final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
                             AVCaptureAudioDataOutputSampleBufferDelegate, @unchecked Sendable {
-    /// 録画の長辺のピクセル数 (Retina をそのまま録ると重くファイルも大きいので 1080p 相当に縮める)
-    static let maxWidth = 1920
-
     private let queue = DispatchQueue(label: "recorder", qos: .userInitiated)
     private var stream: SCStream?
     private var writer: AVAssetWriter?
@@ -36,7 +52,9 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
     ///   - screen: 録画する画面
     ///   - excluding: 録画に映さないウィンドウ (操作ウィンドウ) の番号
     ///   - microphone: 音声を録るマイク (nil なら音声なし)
-    func start(screen: NSScreen, excluding windowNumbers: [Int], microphone: AVCaptureDevice?) async throws -> URL {
+    ///   - settings: 画質などの設定
+    func start(screen: NSScreen, excluding windowNumbers: [Int], microphone: AVCaptureDevice?,
+               settings: RecordSettings) async throws -> URL {
         // 画面収録の許可がない場合、ここで macOS が許可を求める (または失敗する)
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         let displayID = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
@@ -46,18 +64,19 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
         let excluded = content.windows.filter { windowNumbers.contains(Int($0.windowID)) }
         let filter = SCContentFilter(display: display, excludingWindows: excluded)
 
-        // 縦横比を保って長辺を maxWidth 以下に (エンコーダのため偶数にそろえる)
+        // 縦横比を保って長辺を設定の値以下に (エンコーダのため偶数にそろえる)
         // display.width はポイント単位なので、Retina や HiDPI の画面では実際の画素数に直す
         let pixelScale = screen.backingScaleFactor
         let pixelWidth = Double(display.width) * pixelScale, pixelHeight = Double(display.height) * pixelScale
-        let scale = min(1, Double(Self.maxWidth) / pixelWidth)
+        let longSide = max(pixelWidth, pixelHeight)
+        let scale = settings.maxLongSide > 0 ? min(1, Double(settings.maxLongSide) / longSide) : 1
         let width = Int(pixelWidth * scale) / 2 * 2
         let height = Int(pixelHeight * scale) / 2 * 2
 
         let config = SCStreamConfiguration()
         config.width = width
         config.height = height
-        config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
+        config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(settings.fps))
         config.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
         config.showsCursor = true
         config.queueDepth = 6
@@ -72,13 +91,13 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
         writer.movieFragmentInterval = CMTime(seconds: 2, preferredTimescale: 600)
 
         let video = AVAssetWriterInput(mediaType: .video, outputSettings: [
-            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoCodecKey: settings.hevc ? AVVideoCodecType.hevc : AVVideoCodecType.h264,
             AVVideoWidthKey: width,
             AVVideoHeightKey: height,
             AVVideoCompressionPropertiesKey: [
-                AVVideoAverageBitRateKey: 8_000_000,
-                AVVideoExpectedSourceFrameRateKey: 30,
-                AVVideoMaxKeyFrameIntervalKey: 60,
+                AVVideoAverageBitRateKey: settings.videoMbps * 1_000_000,
+                AVVideoExpectedSourceFrameRateKey: settings.fps,
+                AVVideoMaxKeyFrameIntervalKey: settings.fps * 2,   // 2 秒ごとにキーフレーム
             ],
         ])
         video.expectsMediaDataInRealTime = true
@@ -94,7 +113,7 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
                     AVFormatIDKey: kAudioFormatMPEG4AAC,
                     AVNumberOfChannelsKey: 1,
                     AVSampleRateKey: 48_000,
-                    AVEncoderBitRateKey: 128_000,
+                    AVEncoderBitRateKey: settings.audioKbps * 1000,
                 ])
                 audio.expectsMediaDataInRealTime = true
                 writer.add(audio)

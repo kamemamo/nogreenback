@@ -693,6 +693,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         set { UserDefaults.standard.set(newValue, forKey: "backgroundID") }
     }
     var recordScreenPopup = NSPopUpButton()
+    var recordSizeLabel = NSTextField(labelWithString: "")
+
+    /// 録画の設定 (UserDefaults に保存)
+    var recordSettings: RecordSettings {
+        get {
+            let d = UserDefaults.standard
+            var r = RecordSettings()
+            if d.object(forKey: "recMbps") != nil { r.videoMbps = d.integer(forKey: "recMbps") }
+            if d.object(forKey: "recLongSide") != nil { r.maxLongSide = d.integer(forKey: "recLongSide") }
+            if d.object(forKey: "recFPS") != nil { r.fps = d.integer(forKey: "recFPS") }
+            r.hevc = d.bool(forKey: "recHEVC")
+            if d.object(forKey: "recAudioKbps") != nil { r.audioKbps = d.integer(forKey: "recAudioKbps") }
+            return r
+        }
+        set {
+            let d = UserDefaults.standard
+            d.set(newValue.videoMbps, forKey: "recMbps")
+            d.set(newValue.maxLongSide, forKey: "recLongSide")
+            d.set(newValue.fps, forKey: "recFPS")
+            d.set(newValue.hevc, forKey: "recHEVC")
+            d.set(newValue.audioKbps, forKey: "recAudioKbps")
+            updateRecordSizeLabel()
+        }
+    }
+
+    /// 1 時間あたりのファイルの大きさの目安 (動きが多いときの上限に近い値)
+    func updateRecordSizeLabel() {
+        let r = recordSettings
+        let gb = Double(r.videoMbps * 1000 + r.audioKbps) * 3600 / 8 / 1_000_000
+        recordSizeLabel.stringValue = String(format: "1 時間で最大 約 %.1f GB", gb)
+    }
+
+    @objc func recordMbpsChanged(_ sender: NSPopUpButton) {
+        recordSettings.videoMbps = RecordSettings.videoMbpsChoices[sender.indexOfSelectedItem]
+    }
+    @objc func recordSizeChanged(_ sender: NSPopUpButton) {
+        recordSettings.maxLongSide = RecordSettings.maxLongSideChoices[sender.indexOfSelectedItem]
+    }
+    @objc func recordFPSChanged(_ sender: NSPopUpButton) {
+        recordSettings.fps = RecordSettings.fpsChoices[sender.indexOfSelectedItem]
+    }
+    @objc func recordCodecChanged(_ sender: NSPopUpButton) {
+        recordSettings.hevc = sender.indexOfSelectedItem == 1
+    }
+    @objc func recordAudioChanged(_ sender: NSPopUpButton) {
+        recordSettings.audioKbps = RecordSettings.audioKbpsChoices[sender.indexOfSelectedItem]
+    }
     /// 録画する画面の名前 (nil なら「表示する画面」と同じ)
     var recordScreenName: String? {
         get { UserDefaults.standard.string(forKey: "recordScreen") }
@@ -1009,7 +1056,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recordScreenPopup.action = #selector(recordScreenChanged(_:))
         recordScreenPopup.toolTip = "「● 録画開始」で録画する画面"
         let bar5 = NSStackView(views: [
-            NSTextField(labelWithString: "録画する画面"), recordScreenPopup,
             NSTextField(labelWithString: "背景映像"), bgPopup,
             outputCheck, NSTextField(labelWithString: "出す画面"), outputScreenPopup, outputHint, NSView(),
         ])
@@ -1018,7 +1064,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         bar5.edgeInsets = NSEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
         refreshScreens()
 
-        let root = NSStackView(views: [bar, bar2, bar3, bar4, bar5, preview])
+        // 6 段目: 録画の設定 (数値で選ぶ)
+        func popup(_ titles: [String], _ index: Int, _ action: Selector, _ tip: String) -> NSPopUpButton {
+            let p = NSPopUpButton()
+            p.addItems(withTitles: titles)
+            p.selectItem(at: max(0, index))
+            p.target = self
+            p.action = action
+            p.toolTip = tip
+            return p
+        }
+        let rs = recordSettings
+        let mbpsPopup = popup(RecordSettings.videoMbpsChoices.map { "\($0) Mbps" },
+                              RecordSettings.videoMbpsChoices.firstIndex(of: rs.videoMbps) ?? 2,
+                              #selector(recordMbpsChanged(_:)), "映像の平均ビットレート。上げるほど文字や動きがきれいになり、ファイルが大きくなります")
+        let sizePopup = popup(RecordSettings.maxLongSideChoices.map { $0 > 0 ? "\($0)" : "縮めない" },
+                              RecordSettings.maxLongSideChoices.firstIndex(of: rs.maxLongSide) ?? 1,
+                              #selector(recordSizeChanged(_:)), "録画の長辺のピクセル数 (画面のほうが小さいときは画面のまま)。1920 で 1080p 相当")
+        let recFPSPopup = popup(RecordSettings.fpsChoices.map { "\($0) fps" },
+                             RecordSettings.fpsChoices.firstIndex(of: rs.fps) ?? 2,
+                             #selector(recordFPSChanged(_:)), "最大フレームレート (画面が動かない間はコマ数が減ります)")
+        let codecPopup = popup(["H.264", "HEVC (H.265)"], rs.hevc ? 1 : 0,
+                               #selector(recordCodecChanged(_:)), "HEVC は同じ画質でファイルが約半分。古い Mac や一部の編集ソフトでは開けないことがあります")
+        let audioPopup = popup(RecordSettings.audioKbpsChoices.map { "\($0) kbps" },
+                               RecordSettings.audioKbpsChoices.firstIndex(of: rs.audioKbps) ?? 2,
+                               #selector(recordAudioChanged(_:)), "音声 (AAC・48kHz・モノラル) のビットレート")
+        recordSizeLabel.textColor = .secondaryLabelColor
+        recordSizeLabel.font = .systemFont(ofSize: 11)
+        updateRecordSizeLabel()
+        let bar6 = NSStackView(views: [
+            NSTextField(labelWithString: "録画する画面"), recordScreenPopup,
+            NSTextField(labelWithString: "映像"), mbpsPopup,
+            NSTextField(labelWithString: "長辺"), sizePopup,
+            recFPSPopup, codecPopup,
+            NSTextField(labelWithString: "音声"), audioPopup,
+            recordSizeLabel, NSView(),
+        ])
+        bar6.orientation = .horizontal
+        bar6.spacing = 8
+        bar6.edgeInsets = NSEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
+
+        let root = NSStackView(views: [bar, bar2, bar3, bar4, bar5, bar6, preview])
         root.orientation = .vertical
         root.spacing = 0
         root.alignment = .leading
@@ -1027,6 +1113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         bar3.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
         bar4.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
         bar5.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        bar6.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
         preview.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
         window.contentView = root
         // 画面に重ねた表示が残っていても、メインウィンドウを閉じたら終了する
@@ -1431,7 +1518,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 do {
                     _ = try await rec.start(screen: self.recordScreen,
                                             excluding: [self.window.windowNumber],
-                                            microphone: self.selectedMic)
+                                            microphone: self.selectedMic,
+                                            settings: self.recordSettings)
                     self.recorder = rec
                     // 録画中はメーター用にマイクを開かない (Bluetooth マイクは 2 か所から開くと途切れる)
                     self.micMeter.stop()
