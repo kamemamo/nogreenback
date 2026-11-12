@@ -94,6 +94,30 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
     private var frameCount = 0
     private var fpsStart = CACurrentMediaTime()
     var onFPS: ((Double) -> Void)?
+    /// 新しいフレームができたときに描き直す表示 (プレビュー・全画面出力・画面に重ねる表示)。
+    /// 60 回/秒で描き続けるのをやめ、カメラのコマに合わせて描く (高解像度の画面でカクつかないように)
+    private let views = NSHashTable<MTKView>.weakObjects()
+    private var redrawPending = false
+    func addView(_ v: MTKView) {
+        v.isPaused = true
+        v.enableSetNeedsDisplay = false
+        views.add(v)
+    }
+    private func requestRedraw() {
+        previewLock.lock()
+        let busy = redrawPending
+        redrawPending = true
+        previewLock.unlock()
+        if busy { return }   // 前の描画がまだなら、まとめて 1 回にする
+        DispatchQueue.main.async { [self] in
+            previewLock.lock(); redrawPending = false; previewLock.unlock()
+            for v in views.allObjects {
+                // 隠れている・閉じているウィンドウは描かない (全画面出力の裏のプレビューなど)
+                guard let w = v.window, w.isVisible, w.occlusionState.contains(.visible) else { continue }
+                v.draw()
+            }
+        }
+    }
     /// 人物の後ろに敷く映像 (USB キャプチャーなど)
     let background = BackgroundSource()
 
@@ -317,6 +341,7 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
         cb.commit()
 
         previewLock.lock(); _latestImage = display; _latestCutout = cutout; previewLock.unlock()
+        requestRedraw()
 
         frameCount += 1
         let now = CACurrentMediaTime()
@@ -347,8 +372,8 @@ final class PreviewView: MTKView, MTKViewDelegate {
         device = processor.device
         framebufferOnly = false
         colorPixelFormat = .bgra8Unorm
-        preferredFramesPerSecond = 60
         delegate = self
+        processor.addView(self)
     }
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
@@ -394,9 +419,9 @@ final class OverlayView: MTKView, MTKViewDelegate {
         framebufferOnly = false
         colorPixelFormat = .bgra8Unorm
         clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
-        preferredFramesPerSecond = 60
         layer?.isOpaque = false
         delegate = self
+        processor.addView(self)
     }
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
