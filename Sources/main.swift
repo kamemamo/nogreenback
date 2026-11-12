@@ -915,6 +915,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         RunLoop.main.add(lt, forMode: .common)
         micLevelTimer = lt
         refreshMics()
+        // メーター用のマイクは、このアプリを操作している間だけ開く。
+        // Bluetooth のイヤホンはマイクを開いている間「通話用」の低音質になるため、
+        // 開きっぱなしだと QuickTime などで再生した音がノイズまじりに聞こえる
+        NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            self?.micMeter.stop()
+            self?.micLevel.doubleValue = 0
+        }
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            self?.startMeter()
+        }
         for name in [AVCaptureDevice.wasConnectedNotification, AVCaptureDevice.wasDisconnectedNotification] {
             NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 self?.refreshMics()
@@ -1356,7 +1368,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// メーター用にマイクを開く (録画中は録画側の音を使うので開かない)
     func startMeter() {
-        if recorder != nil { return }
+        if recorder != nil || !NSApp.isActive { return }
         micMeter.start(selectedMic)
     }
 
