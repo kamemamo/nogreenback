@@ -359,7 +359,8 @@ final class PreviewView: MTKView, MTKViewDelegate {
         // drawableSize ではなく実際のテクスチャの大きさに合わせる (画面を移ったときに食い違うことがある)
         let size = CGSize(width: drawable.texture.width, height: drawable.texture.height)
         let bounds = CGRect(origin: .zero, size: size)
-        var img = checkered ? checker.cropped(to: bounds) : CIImage(color: .black).cropped(to: bounds)
+        // 映像の外の余白は黒。映像の中の透明な部分だけ市松模様にする
+        var img = CIImage(color: .black).cropped(to: bounds)
         if let frame = processor.latestImage {
             // アスペクト比を保ってフィット
             let e = frame.extent
@@ -367,6 +368,7 @@ final class PreviewView: MTKView, MTKViewDelegate {
             let tx = (size.width - e.width * s) / 2, ty = (size.height - e.height * s) / 2
             let fitted = frame.transformed(by: CGAffineTransform(scaleX: s, y: s)
                 .concatenating(CGAffineTransform(translationX: tx, y: ty)))
+            if checkered { img = checker.cropped(to: fitted.extent).composited(over: img) }
             img = fitted.composited(over: img)
         }
         let dest = CIRenderDestination(width: Int(size.width), height: Int(size.height),
@@ -1137,10 +1139,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 上部: 本番中に触るボタンだけを並べる (オンのときは色が付く)
         let toolbar = NSStackView(views: [
-            helpButton, toolbarSeparator(),
             personButton, outputCheck, overlayCheck, toolbarSeparator(),
             annotationCheck, penButton, clearButton, NSView(),
-            recordButton, recordLabel, fpsLabel,
+            recordButton, recordLabel, fpsLabel, helpButton,
         ])
         toolbar.orientation = .horizontal
         toolbar.spacing = 8
