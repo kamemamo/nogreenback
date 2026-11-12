@@ -1181,6 +1181,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let mirrors = NSStackView()
         for v in [mirror, flip, straight] { mirrors.addView(v, in: .trailing) }
         mirrors.spacing = 14
+        // ペンの色と線を消すまでの時間は 1 行に並べる
+        let penRow = NSStackView(views: [colorPopup, NSTextField(labelWithString: "線を消す"), fadePopup])
+        penRow.spacing = 6
+        colorPopup.widthAnchor.constraint(equalToConstant: 62).isActive = true
+        fadePopup.widthAnchor.constraint(equalToConstant: 106).isActive = true
         // 映像と音声のビットレートは 1 行に並べる
         let rateRow = NSStackView(views: [mbpsPopup, NSTextField(labelWithString: "音声"), audioPopup])
         rateRow.spacing = 6
@@ -1204,8 +1209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             sectionHeader("背景と全画面出力"),
             sideGrid([("背景映像", bgPopup), ("出す画面", outputScreenPopup)]),
             sectionHeader("手書き"),
-            sideGrid([("描くキー", keyPopup), ("色", colorPopup), ("太さ", widthSlider),
-                      ("線を消す", fadePopup)]),
+            sideGrid([("描くキー", keyPopup), ("色", penRow), ("太さ", widthSlider)]),
             sectionHeader("録画"),
             sideGrid([("録画する画面", recordScreenPopup), ("マイク", micRow), ("映像", rateRow),
                       ("長辺", sizePopup), ("フレームレート", recFPSPopup), ("形式", codecPopup)]),
