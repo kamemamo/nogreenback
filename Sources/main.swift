@@ -710,6 +710,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var colorPopup = NSPopUpButton()
     /// Stream Deck などから切り替える「ペン」状態 (キーを押していなくても描ける)
     var penLatched = false
+    var lastScreenCount = NSScreen.screens.count
     var hotKeys: HotKeys?
     let drawKeys: [(title: String, flags: NSEvent.ModifierFlags)] = [
         ("⌥ Option", .option), ("⌃ Control", .control), ("⌥⌘ Option+Command", [.option, .command]),
@@ -879,7 +880,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshScreens()
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
                                                object: nil, queue: .main) { [weak self] _ in
-            self?.refreshScreens(); self?.placeOverlay(); self?.placeOutput()
+            self?.screensChanged()
         }
         recordButton = NSButton(title: "● 録画開始", target: self, action: #selector(recordToggled))
         recordButton.toolTip = "「録画する画面」を録画して、ムービーフォルダに保存します (このウィンドウは映りません)。⌃⌥⌘R でも開始・停止できます"
@@ -1232,8 +1233,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func placeOutput() {
-        // 画面を替えたら作り直す
-        if outputWindow != nil { setOutputVisible(true) }
+        guard let w = outputWindow else { return }
+        if let name = w.screenName, !NSScreen.screens.contains(where: { $0.localizedName == name }) {
+            // 出していた画面 (液晶タブレットやプロジェクター) が外れたら閉じる。
+            // 残った画面に出し直すと、メニューバーごと画面を覆って操作できなくなるため
+            setOutputVisible(false)
+        } else {
+            setOutputVisible(true)   // 画面を替えたら作り直す
+        }
+    }
+
+    /// 画面をつないだり外したりしたとき
+    func screensChanged() {
+        if NSScreen.screens.count < lastScreenCount, penLatched {
+            // 画面が外れたらペンモードを解除する (手書きがクリックを受け止めたままにならないように)
+            penLatched = false
+            annotation?.setDrawing(false)
+        }
+        lastScreenCount = NSScreen.screens.count
+        refreshScreens()
+        placeOverlay()
+        placeOutput()
     }
 
     @objc func outputScreenChanged(_ sender: NSPopUpButton) {

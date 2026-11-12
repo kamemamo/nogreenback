@@ -57,6 +57,8 @@ final class OutputWindow: NSWindow {
     let view: PreviewView
     /// Esc で閉じたときの通知
     var onClose: (() -> Void)?
+    /// 出している画面の名前 (その画面が外れたかどうかの判定に使う)
+    private(set) var screenName: String?
 
     /// 最初から画面の大きさで作る (後から大きさを変えると、描画が隅に寄ることがある)
     init(processor: Processor, screen: NSScreen) {
@@ -77,8 +79,11 @@ final class OutputWindow: NSWindow {
     /// 画面いっぱいに表示する (メニューバーと Dock の上も覆う)
     func show(on screen: NSScreen) {
         level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.mainMenuWindow)) + 1)
+        screenName = screen.localizedName
         setFrame(screen.frame, display: true)
         orderFrontRegardless()
+        // このアプリを操作中なら、すぐ Esc で閉じられるようにキー入力を受け取る
+        if NSApp.isActive { makeKey() }
     }
 
     override func cancelOperation(_ sender: Any?) { onClose?() }
