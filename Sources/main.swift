@@ -30,6 +30,7 @@ final class Settings: @unchecked Sendable {
     private var _deflicker: Double = 0.7
     private var _pipCorner = 0
     private var _pipScale: Double = 0.35
+    private var _showPerson = true
 
     private func get<T>(_ v: () -> T) -> T { lock.lock(); defer { lock.unlock() }; return v() }
     private func set(_ f: () -> Void) { lock.lock(); f(); lock.unlock() }
@@ -55,6 +56,8 @@ final class Settings: @unchecked Sendable {
     /// 背景映像があるときの人物の位置 (OverlayWindow.Corner の rawValue) と、画面幅に対する大きさ
     var pipCorner: Int { get { get { _pipCorner } } set { set { _pipCorner = newValue } } }
     var pipScale: Double { get { get { _pipScale } } set { set { _pipScale = newValue } } }
+    /// 背景映像があるときに人物を入れるか (「画面に表示」・⌃⌥⌘P と連動)
+    var showPerson: Bool { get { get { _showPerson } } set { set { _showPerson = newValue } } }
 }
 
 // MARK: - 映像処理
@@ -281,7 +284,8 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
             let py = (corner == .bottomRight || corner == .bottomLeft) ? 0 : extent.height - h   // 左下原点
             let person = cutout.transformed(by: CGAffineTransform(scaleX: ps, y: ps)
                 .concatenating(CGAffineTransform(translationX: px, y: py)))
-            source = person.composited(over: fitted).cropped(to: extent)
+            source = settings.showPerson ? person.composited(over: fitted).cropped(to: extent)
+                                         : fitted.cropped(to: extent)
         }
 
         // 3) テクスチャに描画して Syphon 送出
@@ -1271,6 +1275,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func updateOverlayVisibility() {
         let covered = outputWindow != nil && outputScreen == overlayScreen
         overlay?.setVisible(overlayOn && !covered)
+        // 背景映像に入れる人物も、「画面に表示」に合わせて出し入れする
+        settings.showPerson = overlayOn
     }
 
     func placeOverlay() {
