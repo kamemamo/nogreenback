@@ -1186,6 +1186,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         penRow.spacing = 6
         colorPopup.widthAnchor.constraint(equalToConstant: 62).isActive = true
         fadePopup.widthAnchor.constraint(equalToConstant: 106).isActive = true
+        // 録画の長辺とフレームレートは 1 行に並べる (フレームレートは「30 fps」のように単位付きで出る)
+        let sizeRow = NSStackView(views: [sizePopup, recFPSPopup])
+        sizeRow.spacing = 8
+        sizePopup.widthAnchor.constraint(equalToConstant: 112).isActive = true
+        recFPSPopup.widthAnchor.constraint(equalToConstant: 112).isActive = true
         // 映像と音声のビットレートは 1 行に並べる
         let rateRow = NSStackView(views: [mbpsPopup, NSTextField(labelWithString: "音声"), audioPopup])
         rateRow.spacing = 6
@@ -1199,9 +1204,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ("境界ぼかし", feather), ("明るさ安定化", deflicker),
         ])
         tuning.isHidden = !tuningOpen
+        let cameraGrid = sideGrid([("カメラ", cameraPopup), ("品質", quality), ("フレームレート", fpsPopup)])
         let sections: [NSView] = [
             sectionHeader("カメラ"),
-            sideGrid([("カメラ", cameraPopup), ("品質", quality), ("フレームレート", fpsPopup)]),
+            cameraGrid,
             mirrors,
             collapsibleSection("切り抜きの調整", content: tuning),
             sectionHeader("人物の位置と大きさ"),
@@ -1212,7 +1218,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             sideGrid([("描くキー", keyPopup), ("色", penRow), ("太さ", widthSlider)]),
             sectionHeader("録画"),
             sideGrid([("録画する画面", recordScreenPopup), ("マイク", micRow), ("映像", rateRow),
-                      ("長辺", sizePopup), ("フレームレート", recFPSPopup), ("形式", codecPopup)]),
+                      ("長辺", sizeRow), ("形式", codecPopup)]),
             recordSizeLabel,
         ]
         let side = NSStackView(views: sections)
@@ -1220,7 +1226,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         side.alignment = .leading
         side.spacing = 6
         side.edgeInsets = NSEdgeInsets(top: 4, left: 14, bottom: 16, right: 14)
-        mirrors.trailingAnchor.constraint(equalTo: side.trailingAnchor, constant: -6).isActive = true
+        mirrors.trailingAnchor.constraint(equalTo: cameraGrid.trailingAnchor, constant: -8).isActive = true
         for v in [mirror, flip, straight] { v.font = .systemFont(ofSize: NSFont.systemFontSize) }
         // 見出しの上は少し空ける
         for (k, v) in sections.enumerated() where k > 0 && v.identifier?.rawValue == "header" {
