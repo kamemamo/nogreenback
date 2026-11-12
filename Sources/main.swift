@@ -898,7 +898,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         micLevel.toolTip = "マイクの入力レベル。話したときに緑〜黄色まで振れればちょうどよい音量です"
         let lt = Timer(timeInterval: 1.0 / 15, repeats: true) { [weak self] _ in
             guard let self else { return }
-            let db = Double(self.micMeter.level)
+            // 録画中は録画側のマイクの音で、それ以外はメーター用に開いたマイクで測る
+            var db = Double(self.micMeter.level)
+            if #available(macOS 12.3, *), let rec = self.recorder as? ScreenRecorder { db = Double(rec.level) }
             // 減るときはゆっくり落とす (針がちらつかないように)
             let v = max(0, min(30, (db + 60) / 2))
             self.micLevel.doubleValue = v >= self.micLevel.doubleValue ? v : max(v, self.micLevel.doubleValue - 1.5)
@@ -1343,6 +1345,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // 「システムの設定に合わせる」、または選んでいたマイクが外れているとき
             micPopup.selectItem(at: 1)
         }
+        startMeter()
+    }
+
+    /// メーター用にマイクを開く (録画中は録画側の音を使うので開かない)
+    func startMeter() {
+        if recorder != nil { return }
         micMeter.start(selectedMic)
     }
 
@@ -1356,14 +1364,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard micPopup.indexOfSelectedItem == 1, micPopup.numberOfItems > 1 else { return }
         let title = systemMicTitle
         if micPopup.item(at: 1)?.title != title { micPopup.item(at: 1)?.title = title }
-        if micMeter.device?.uniqueID != selectedMic?.uniqueID { micMeter.start(selectedMic) }
+        if micMeter.device?.uniqueID != selectedMic?.uniqueID { startMeter() }
     }
 
     @objc func micChanged(_ sender: NSPopUpButton) {
         let i = sender.indexOfSelectedItem
         recordMic = i > 0
         recordMicID = i >= 2 ? micDevices[i - 2].uniqueID : nil   // nil = システムの設定に合わせる
-        micMeter.start(selectedMic)
+        startMeter()
     }
 
     /// 録画に使うマイク (なしなら nil)
@@ -1383,6 +1391,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in
                 let url = await rec.stop()
                 self.recorder = nil
+                self.startMeter()
                 self.recordTimer?.invalidate()
                 self.recordLabel.stringValue = ""
                 self.recordButton.title = "● 録画開始"
@@ -1406,6 +1415,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                             excluding: [self.window.windowNumber],
                                             microphone: self.selectedMic)
                     self.recorder = rec
+                    // 録画中はメーター用にマイクを開かない (Bluetooth マイクは 2 か所から開くと途切れる)
+                    self.micMeter.stop()
                     self.recordButton.title = "■ 録画停止"
                     self.recordStart = Date()
                     self.recordLabel.stringValue = "0:00"

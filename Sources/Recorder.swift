@@ -209,10 +209,45 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
 
     // MARK: マイクの音声
 
+    /// 録画中のマイクの入力レベル (dBFS)。録画中はメーターもこの値を使う
+    /// (同じ Bluetooth マイクを 2 か所から開くと、音が途切れやすくなるため)
+    var level: Float { levelLock.lock(); defer { levelLock.unlock() }; return _level }
+    private let levelLock = NSLock()
+    private var _level: Float = -160
+    /// 音の時刻の基準と、そこから書き込んだサンプル数
+    private var audioAnchor: CMTime?
+    private var audioFrames: Int64 = 0
+
     func captureOutput(_ output: AVCaptureOutput, didOutput sb: CMSampleBuffer, from connection: AVCaptureConnection) {
+        let db = connection.audioChannels.map(\.averagePowerLevel).max() ?? -160
+        levelLock.lock(); _level = db; levelLock.unlock()
+
         // 映像が始まる前の音は捨てる (始点を映像にそろえる)
-        guard started, let audioInput, audioInput.isReadyForMoreMediaData else { return }
-        if audioInput.append(sb) { audioSamplesWritten += 1 }
+        guard started, let audioInput else { return }
+        let frames = Int64(CMSampleBufferGetNumSamples(sb))
+        let rate = Int32(sb.formatDescription?.audioStreamBasicDescription?.mSampleRate ?? 48_000)
+        guard frames > 0, rate > 0 else { return }
+
+        // Bluetooth のマイクは音の届く時刻が不規則なので、届いた時刻のまま書くと、すき間が無音になって途切れる。
+        // 最初の時刻を基準に、サンプル数から時刻を付け直して隙間なく並べる。
+        // ただし 0.25 秒以上ずれたとき (本当に音が途切れた、映像とずれてきた) は基準を取り直す
+        let pts = sb.presentationTimeStamp
+        let offset = CMTime(value: audioFrames, timescale: rate)
+        if let anchor = audioAnchor {
+            let drift = CMTimeGetSeconds(CMTimeSubtract(pts, CMTimeAdd(anchor, offset)))
+            if abs(drift) > 0.25 { audioAnchor = CMTimeSubtract(pts, offset) }
+        } else {
+            audioAnchor = CMTimeSubtract(pts, offset)
+        }
+        var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: rate),
+                                        presentationTimeStamp: CMTimeAdd(audioAnchor!, offset),
+                                        decodeTimeStamp: .invalid)
+        var retimed: CMSampleBuffer?
+        CMSampleBufferCreateCopyWithNewTiming(allocator: nil, sampleBuffer: sb, sampleTimingEntryCount: 1,
+                                              sampleTimingArray: &timing, sampleBufferOut: &retimed)
+        audioFrames += frames
+        guard let retimed, audioInput.isReadyForMoreMediaData else { return }
+        if audioInput.append(retimed) { audioSamplesWritten += 1 }
     }
 }
 
