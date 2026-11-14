@@ -98,6 +98,13 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
     /// 60 回/秒で描き続けるのをやめ、カメラのコマに合わせて描く (高解像度の画面でカクつかないように)
     private let views = NSHashTable<MTKView>.weakObjects()
     private var redrawPending = false
+    /// 映像の下に重ねる字幕の文字 (空なら出さない)
+    private var _subtitle = ""
+    private var subtitleCache: (text: String, size: CGSize, image: CIImage?)?
+    var subtitle: String {
+        get { previewLock.lock(); defer { previewLock.unlock() }; return _subtitle }
+        set { previewLock.lock(); _subtitle = newValue; previewLock.unlock() }
+    }
     func addView(_ v: MTKView) {
         v.isPaused = true
         v.enableSetNeedsDisplay = false
@@ -321,6 +328,18 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
             display = person.composited(over: CIImage(color: .clear).cropped(to: extent)).cropped(to: extent)
         }
 
+        // 字幕を下の中央に重ねる (プレビュー・全画面出力・Syphon のすべて)
+        let text = subtitle
+        if !text.isEmpty {
+            if subtitleCache?.text != text || subtitleCache?.size != extent.size {
+                subtitleCache = (text, extent.size, SubtitleRenderer.image(text: text, extent: extent))
+            }
+            if let sub = subtitleCache?.image {
+                source = sub.composited(over: source).cropped(to: extent)
+                display = sub.composited(over: display).cropped(to: extent)
+            }
+        }
+
         // 3) テクスチャに描画して Syphon 送出
         let w = Int(extent.width), h = Int(extent.height)
         let tex = texture(width: w, height: h)
@@ -494,7 +513,6 @@ final class OverlayWindow: NSPanel {
     }
 
     func setVisible(_ on: Bool) {
-        view.isPaused = !on
         keepFrontTimer?.invalidate()
         keepFrontTimer = nil
         if on {
@@ -768,7 +786,7 @@ final class RecordingPanel: NSPanel {
 /// 上から下へ並べるための、座標が上から始まるビュー (サイドバーのスクロール用)
 final class FlippedView: NSView { override var isFlipped: Bool { true } }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
     let settings = Settings()
     var processor: Processor!
     let session = AVCaptureSession()
@@ -803,6 +821,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         set { UserDefaults.standard.set(newValue, forKey: "personOn") }
     }
     var personButton = NSButton()
+    // 字幕 (試作)
+    var subtitleButton = NSButton()
+    let subtitles = SubtitleEngine()
+    /// デスクトップに出す字幕 (録画にも映る)
+    lazy var subtitleWindow = SubtitleWindow()
+    var subtitleClearTimer: Timer?
+    let termsView = NSTextView()
+    var termsSaveTimer: Timer?
+    /// 字幕の認識で聞き取りやすくしたい用語 (1 行に 1 語)
+    var subtitleTerms: String {
+        get { UserDefaults.standard.string(forKey: "subtitleTerms") ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: "subtitleTerms") }
+    }
+    var subtitleTermList: [String] {
+        subtitleTerms.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
     var overlayCorner: OverlayWindow.Corner {
         get { .init(rawValue: UserDefaults.standard.integer(forKey: "overlayCorner")) ?? .bottomRight }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "overlayCorner") }
@@ -825,6 +860,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var n = (annotation?.windows.map(\.windowNumber) ?? [])
         if let overlay { n.append(overlay.windowNumber) }
         if let outputWindow { n.append(outputWindow.windowNumber) }
+        n.append(subtitleWindow.windowNumber)
         return n
     }
 
@@ -1232,9 +1268,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         helpButton.bezelStyle = .helpButton
         helpButton.toolTip = "ショートカットの一覧 (⌘/)"
 
+        subtitleButton = toolbarToggle("字幕", #selector(subtitleToggled(_:)))
+        subtitleButton.toolTip = "話した言葉を文字にして、映像の下に出します (試作)。認識は Mac の中で行います"
+        subtitles.terms = subtitleTermList
+        subtitles.onText = { [weak self] text in self?.showSubtitle(text) }
+        subtitles.onError = { [weak self] msg in
+            self?.subtitleButton.state = .off
+            self?.subtitles.stop()
+            self?.setSubtitle("")
+            self?.showAlert(msg)
+        }
+
         // 上部: 本番中に触るボタンだけを並べる (オンのときは色が付く)
         let toolbar = NSStackView(views: [
-            personButton, outputCheck, overlayCheck, toolbarSeparator(),
+            personButton, outputCheck, overlayCheck, subtitleButton, toolbarSeparator(),
             annotationCheck, penButton, clearButton, NSView(),
             recordButton, recordLabel, fpsLabel, helpButton,
         ])
@@ -1274,6 +1321,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ("境界ぼかし", feather), ("明るさ安定化", deflicker),
         ])
         tuning.isHidden = !tuningOpen
+        // 字幕の用語: 授業で使う専門用語や固有名詞を 1 行に 1 語ずつ書く
+        termsView.string = subtitleTerms
+        termsView.font = .systemFont(ofSize: 13)
+        termsView.isRichText = false
+        termsView.isAutomaticQuoteSubstitutionEnabled = false
+        termsView.isAutomaticTextReplacementEnabled = false
+        termsView.isAutomaticSpellingCorrectionEnabled = false
+        termsView.textContainerInset = NSSize(width: 4, height: 4)
+        termsView.delegate = self
+        termsView.isVerticallyResizable = true
+        termsView.autoresizingMask = [.width]
+        let termsBox = NSScrollView()
+        termsBox.documentView = termsView
+        termsBox.hasVerticalScroller = true
+        termsBox.autohidesScrollers = true
+        termsBox.borderType = .bezelBorder
+        termsBox.widthAnchor.constraint(equalToConstant: sideControlWidth + 104).isActive = true
+        termsBox.heightAnchor.constraint(equalToConstant: 84).isActive = true
+        let termsHint = NSTextField(wrappingLabelWithString: "授業で使う専門用語や人の名前を 1 行に 1 語ずつ書くと、字幕で聞き取りやすくなります (例: Blender、レンダリング)")
+        termsHint.font = .systemFont(ofSize: 11)
+        termsHint.textColor = .secondaryLabelColor
+        termsHint.preferredMaxLayoutWidth = sideControlWidth + 100
+
         let cameraGrid = sideGrid([("カメラ", cameraPopup), ("品質", quality), ("フレームレート", fpsPopup)])
         let sections: [NSView] = [
             sectionHeader("カメラ"),
@@ -1286,6 +1356,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             sideGrid([("背景映像", bgPopup), ("出す画面", outputScreenPopup)]),
             sectionHeader("手書き"),
             sideGrid([("描くキー", keyPopup), ("色", penRow), ("太さ", widthSlider)]),
+            sectionHeader("字幕の用語"),
+            termsBox,
+            termsHint,
             sectionHeader("録画"),
             sideGrid([("録画する画面", recordScreenPopup), ("マイク", micRow), ("映像", rateRow),
                       ("長辺", sizeRow), ("形式", codecPopup)]),
@@ -2054,6 +2127,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         annotation.fadeAfter = fadeTimes[fadeIndex].seconds
     }
     @objc func clearAnnotation() { annotation.clear() }
+
+    @objc func subtitleToggled(_ sender: NSButton) {
+        if sender.state == .on {
+            subtitles.start(microphone: selectedMic)
+        } else {
+            subtitles.stop()
+            subtitleClearTimer?.invalidate()
+            setSubtitle("")
+        }
+    }
+
+    /// 用語の欄を書き換えたら、少し待ってから保存して認識に使う
+    func textDidChange(_ notification: Notification) {
+        guard (notification.object as? NSTextView) === termsView else { return }
+        termsSaveTimer?.invalidate()
+        termsSaveTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: false) { [weak self] _ in
+            guard let self else { return }
+            self.subtitleTerms = self.termsView.string
+            self.subtitles.terms = self.subtitleTermList
+        }
+    }
+
+    /// 字幕を出し、しばらく話さなければ消す
+    func showSubtitle(_ text: String) {
+        guard subtitleButton.state == .on else { return }
+        setSubtitle(text)
+        subtitleClearTimer?.invalidate()
+        subtitleClearTimer = Timer.scheduledTimer(withTimeInterval: 4, repeats: false) { [weak self] _ in
+            self?.setSubtitle("")
+        }
+    }
+
+    /// 字幕を、映像 (プレビュー・全画面出力・Syphon) とデスクトップの両方に出す。
+    /// 全画面出力が「表示する画面」を覆っているときは、全画面出力の字幕だけにする
+    func setSubtitle(_ text: String) {
+        processor.subtitle = text
+        let covered = outputWindow != nil && outputScreen == overlayScreen
+        subtitleWindow.show(covered ? "" : text, on: overlayScreen)
+    }
 
     @objc func personToggled(_ sender: NSButton) {
         personOn = sender.state == .on
