@@ -833,15 +833,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
     var utteranceStart: Date?
     var subtitleClearTimer: Timer?
     let termsView = NSTextView()
+    let termsCountLabel = NSTextField(labelWithString: "")
     var termsSaveTimer: Timer?
-    /// 字幕の認識で聞き取りやすくしたい用語 (1 行に 1 語)
+    /// 字幕の置き換え (1 行に「間違い → 正しい」)
     var subtitleTerms: String {
         get { UserDefaults.standard.string(forKey: "subtitleTerms") ?? "" }
         set { UserDefaults.standard.set(newValue, forKey: "subtitleTerms") }
     }
-    var subtitleTermList: [String] {
+    /// 欄の各行 (空行は除く)
+    private var subtitleTermLines: [String] {
         subtitleTerms.split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
+    /// 「間違い → 正しい」の行から作る置き換えの表 (長いものから先に置き換える)
+    var subtitleReplacements: [(from: String, to: String)] {
+        subtitleTermLines.compactMap { line -> (String, String)? in
+            for sep in ["→", "->", "=", "＝"] {
+                guard let r = line.range(of: sep) else { continue }
+                let from = line[..<r.lowerBound].trimmingCharacters(in: .whitespaces)
+                let to = line[r.upperBound...].trimmingCharacters(in: .whitespaces)
+                return from.isEmpty ? nil : (from, to)
+            }
+            return nil
+        }.sorted { $0.0.count > $1.0.count }
+    }
+    /// 認識のヒントに渡す語 (置き換え後の正しい表記と、矢印のない行)
+    var subtitleTermList: [String] {
+        subtitleTermLines.map { line in
+            for sep in ["→", "->", "=", "＝"] {
+                if let r = line.range(of: sep) { return line[r.upperBound...].trimmingCharacters(in: .whitespaces) }
+            }
+            return line
+        }.filter { !$0.isEmpty }
+    }
+    private var cachedReplacements: [(from: String, to: String)] = []
+    /// 認識した文字に置き換えの表を当てる
+    func applyReplacements(_ text: String) -> String {
+        var t = text
+        for r in cachedReplacements { t = t.replacingOccurrences(of: r.from, with: r.to) }
+        return t
     }
     var overlayCorner: OverlayWindow.Corner {
         get { .init(rawValue: UserDefaults.standard.integer(forKey: "overlayCorner")) ?? .bottomRight }
@@ -1276,8 +1306,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         subtitleButton = toolbarToggle("字幕", #selector(subtitleToggled(_:)))
         subtitleButton.toolTip = "話した言葉を文字にして、映像の下に出します (試作)。認識は Mac の中で行います"
         subtitles.terms = subtitleTermList
-        subtitles.onText = { [weak self] text in self?.showSubtitle(text) }
-        subtitles.onFinal = { [weak self] text in self?.subtitleFinalized(text) }
+        cachedReplacements = subtitleReplacements
+        subtitles.onText = { [weak self] text in
+            guard let self else { return }
+            self.showSubtitle(self.applyReplacements(text))
+        }
+        subtitles.onFinal = { [weak self] text in
+            guard let self else { return }
+            self.subtitleFinalized(self.applyReplacements(text))
+        }
         subtitles.onError = { [weak self] msg in
             self?.subtitleButton.state = .off
             self?.subtitles.stop()
@@ -1327,7 +1364,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
             ("境界ぼかし", feather), ("明るさ安定化", deflicker),
         ])
         tuning.isHidden = !tuningOpen
-        // 字幕の用語: 授業で使う専門用語や固有名詞を 1 行に 1 語ずつ書く
+        // 字幕の置き換え: よく間違える言葉を「間違い → 正しい」と 1 行ずつ書く
         termsView.string = subtitleTerms
         termsView.font = .systemFont(ofSize: 13)
         termsView.isRichText = false
@@ -1345,10 +1382,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         termsBox.borderType = .bezelBorder
         termsBox.widthAnchor.constraint(equalToConstant: sideControlWidth + 104).isActive = true
         termsBox.heightAnchor.constraint(equalToConstant: 84).isActive = true
-        let termsHint = NSTextField(wrappingLabelWithString: "授業で使う専門用語や人の名前を 1 行に 1 語ずつ書くと、字幕で聞き取りやすくなります (例: Blender、レンダリング)")
+        let termsHint = NSTextField(wrappingLabelWithString: "よく間違える言葉を「間違い → 正しい」と 1 行ずつ書くと、字幕と字幕ファイルで置き換えます (例: ジオメトリー濃度 → ジオメトリーノード、ブレンダー → Blender)。→ は -> や = でも書けます")
         termsHint.font = .systemFont(ofSize: 11)
         termsHint.textColor = .secondaryLabelColor
         termsHint.preferredMaxLayoutWidth = sideControlWidth + 100
+        termsCountLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        updateTermsCount()
 
         let cameraGrid = sideGrid([("カメラ", cameraPopup), ("品質", quality), ("フレームレート", fpsPopup)])
         let sections: [NSView] = [
@@ -1362,8 +1401,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
             sideGrid([("背景映像", bgPopup), ("出す画面", outputScreenPopup)]),
             sectionHeader("手書き"),
             sideGrid([("描くキー", keyPopup), ("色", penRow), ("太さ", widthSlider)]),
-            sectionHeader("字幕の用語"),
+            sectionHeader("字幕の置き換え"),
             termsBox,
+            termsCountLabel,
             termsHint,
             sectionHeader("録画"),
             sideGrid([("録画する画面", recordScreenPopup), ("マイク", micRow), ("映像", rateRow),
@@ -2162,7 +2202,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
             guard let self else { return }
             self.subtitleTerms = self.termsView.string
             self.subtitles.terms = self.subtitleTermList
+            self.cachedReplacements = self.subtitleReplacements
+            self.updateTermsCount()
         }
+    }
+
+    /// 字幕に使っている置き換えの数を出す
+    func updateTermsCount() {
+        let n = subtitleReplacements.count
+        termsCountLabel.stringValue = n == 0 ? "置き換えは登録されていません" : "✓ \(n) 件の置き換えを字幕に使っています"
+        termsCountLabel.textColor = n == 0 ? .secondaryLabelColor : .systemGreen
     }
 
     /// 文が確定したら、録画中なら字幕ファイル用に時刻と一緒に残す
