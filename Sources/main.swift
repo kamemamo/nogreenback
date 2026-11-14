@@ -31,6 +31,7 @@ final class Settings: @unchecked Sendable {
     private var _pipCorner = 0
     private var _pipScale: Double = 0.35
     private var _showPerson = true
+    private var _canvasAspect: Double = 0
 
     private func get<T>(_ v: () -> T) -> T { lock.lock(); defer { lock.unlock() }; return v() }
     private func set(_ f: () -> Void) { lock.lock(); f(); lock.unlock() }
@@ -58,6 +59,8 @@ final class Settings: @unchecked Sendable {
     var pipScale: Double { get { get { _pipScale } } set { set { _pipScale = newValue } } }
     /// 背景映像があるときに人物を入れるか (「画面に表示」・⌃⌥⌘P と連動)
     var showPerson: Bool { get { get { _showPerson } } set { set { _showPerson = newValue } } }
+    /// 合成した映像の横縦比 (0 = カメラの比率のまま)。全画面で出す画面の比率に合わせるときに使う
+    var canvasAspect: Double { get { get { _canvasAspect } } set { set { _canvasAspect = newValue } } }
 }
 
 // MARK: - 映像処理
@@ -100,10 +103,26 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
     private var redrawPending = false
     /// 映像の下に重ねる字幕の文字 (空なら出さない)
     private var _subtitle = ""
-    private var subtitleCache: (text: String, size: CGSize, image: CIImage?)?
+    private var subtitleCache: (text: String, images: [String: CIImage])?
+
+    /// 字幕の画像 (文字と大きさが同じあいだは作り直さない)
+    private func subtitleImage(_ text: String, extent: CGRect) -> CIImage? {
+        if subtitleCache?.text != text { subtitleCache = (text, [:]) }
+        let key = "\(Int(extent.width))x\(Int(extent.height))"
+        if let img = subtitleCache?.images[key] { return img }
+        let img = SubtitleRenderer.image(text: text, extent: extent)
+        subtitleCache?.images[key] = img
+        return img
+    }
     var subtitle: String {
         get { previewLock.lock(); defer { previewLock.unlock() }; return _subtitle }
         set { previewLock.lock(); _subtitle = newValue; previewLock.unlock() }
+    }
+    private var _annotationImage: CIImage?
+    /// 全画面出力の上に描いた手書きの線 (合成した映像と同じ座標)。プレビューと Syphon にも重ねる
+    var annotationImage: CIImage? {
+        get { previewLock.lock(); defer { previewLock.unlock() }; return _annotationImage }
+        set { previewLock.lock(); _annotationImage = newValue; previewLock.unlock() }
     }
     func addView(_ v: MTKView) {
         v.isPaused = true
@@ -301,47 +320,55 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
         if !settings.showPerson { cutout = CIImage(color: .clear).cropped(to: extent) }
         source = cutout
 
-        // 人物は「位置」「大きさ」に合わせて小さくして隅に置く
+        // 合成する映像の大きさ。高さはカメラのまま、横幅を出す画面の比率に合わせる
+        let aspect = settings.canvasAspect
+        let canvas = aspect > 0
+            ? CGRect(x: 0, y: 0, width: (extent.height * CGFloat(aspect) / 2).rounded() * 2, height: extent.height)
+            : extent
+        // 人物は「位置」「大きさ」に合わせて小さくして隅に置く (大きさは画面の高さに対する割合)
         let corner = OverlayWindow.Corner(rawValue: settings.pipCorner) ?? .bottomRight
         let ps = CGFloat(settings.pipScale)
         let pw = extent.width * ps, ph = extent.height * ps
-        let px = (corner == .bottomRight || corner == .topRight) ? extent.width - pw : 0
-        let py = (corner == .bottomRight || corner == .bottomLeft) ? 0 : extent.height - ph   // 左下原点
+        let px = (corner == .bottomRight || corner == .topRight) ? canvas.width - pw : 0
+        let py = (corner == .bottomRight || corner == .bottomLeft) ? 0 : canvas.height - ph   // 左下原点
         let person = cutout.transformed(by: CGAffineTransform(scaleX: ps, y: ps)
             .concatenating(CGAffineTransform(translationX: px, y: py)))
         // プレビューと全画面出力に出す映像
         var display: CIImage
         if let bg = background.latestImage {
-            // 背景映像は画面を埋めるように拡大して敷く (はみ出した分は切る)
+            // 背景映像は切らずに全部入るように縮めて真ん中に置く (比率が違うときの余りは黒)
             let be = bg.extent
-            let s = max(extent.width / be.width, extent.height / be.height)
-            let tx = (extent.width - be.width * s) / 2 - be.minX * s
-            let ty = (extent.height - be.height * s) / 2 - be.minY * s
+            let s = min(canvas.width / be.width, canvas.height / be.height)
+            let tx = (canvas.width - be.width * s) / 2 - be.minX * s
+            let ty = (canvas.height - be.height * s) / 2 - be.minY * s
             let fitted = bg.transformed(by: CGAffineTransform(scaleX: s, y: s)
                 .concatenating(CGAffineTransform(translationX: tx, y: ty)))
-            display = person.composited(over: fitted).cropped(to: extent)
+            let black = CIImage(color: .black).cropped(to: canvas)
+            display = person.composited(over: fitted.composited(over: black)).cropped(to: canvas)
             source = display
         } else {
             // 背景なし: Syphon には人物を元の大きさで送り (OBS 側で配置する)、
             // プレビューと全画面出力では、背景ありのときと同じ位置・大きさにする
             // (透明な下地を敷いて、映像の大きさを元のままにする)
-            display = person.composited(over: CIImage(color: .clear).cropped(to: extent)).cropped(to: extent)
+            display = person.composited(over: CIImage(color: .clear).cropped(to: canvas)).cropped(to: canvas)
+        }
+
+        // 全画面出力の上に描いた手書きを重ねる (背景があるときは Syphon にも)
+        if let lines = annotationImage, lines.extent.size == canvas.size {
+            display = lines.composited(over: display).cropped(to: canvas)
+            if background.latestImage != nil { source = display }
         }
 
         // 字幕を下の中央に重ねる (プレビュー・全画面出力・Syphon のすべて)
         let text = subtitle
         if !text.isEmpty {
-            if subtitleCache?.text != text || subtitleCache?.size != extent.size {
-                subtitleCache = (text, extent.size, SubtitleRenderer.image(text: text, extent: extent))
-            }
-            if let sub = subtitleCache?.image {
-                source = sub.composited(over: source).cropped(to: extent)
-                display = sub.composited(over: display).cropped(to: extent)
-            }
+            let se = source.extent, de = display.extent
+            if let sub = subtitleImage(text, extent: se) { source = sub.composited(over: source).cropped(to: se) }
+            if let sub = subtitleImage(text, extent: de) { display = sub.composited(over: display).cropped(to: de) }
         }
 
         // 3) テクスチャに描画して Syphon 送出
-        let w = Int(extent.width), h = Int(extent.height)
+        let w = Int(source.extent.width), h = Int(source.extent.height)
         let tex = texture(width: w, height: h)
         let dest = CIRenderDestination(mtlTexture: tex, commandBuffer: cb)
         // Core Image は左下原点。Metal (左上原点) の向きで書き込む
@@ -544,6 +571,8 @@ final class AnnotationView: NSView {
     var fadeAfter: TimeInterval = 0
     /// 描画できる状態 (キーを押している間) なら画面の縁に枠を出して知らせる
     var drawingMode = false { didSet { if drawingMode != oldValue { needsDisplay = true } } }
+    /// 線が変わって描き直したときの知らせ (全画面出力の映像にも線を入れるため)
+    var onChange: ((AnnotationView) -> Void)?
 
     override var isFlipped: Bool { false }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -595,6 +624,7 @@ final class AnnotationView: NSView {
             s.color.withAlphaComponent(alpha).setStroke()
             path.stroke()
         }
+        onChange?(self)
         if drawingMode {
             let frame = NSBezierPath(rect: bounds.insetBy(dx: 2, dy: 2))
             frame.lineWidth = 4
@@ -649,6 +679,13 @@ final class Annotations {
     var color: NSColor = .systemRed { didSet { windows.forEach { $0.view.color = color } } }
     var lineWidth: CGFloat = 5 { didSet { windows.forEach { $0.view.lineWidth = lineWidth } } }
     var fadeAfter: TimeInterval = 0 { didSet { windows.forEach { $0.view.fadeAfter = fadeAfter } } }
+    var onChange: ((AnnotationView) -> Void)? { didSet { windows.forEach { $0.view.onChange = onChange } } }
+    var isShown: Bool { shown }
+
+    /// その画面を覆っている手書きのウィンドウ
+    func window(for screen: NSScreen) -> AnnotationWindow? {
+        windows.first { $0.frame == screen.frame }
+    }
 
     var strokeCount: Int { windows.reduce(0) { $0 + $1.view.strokes.count } }
 
@@ -665,6 +702,7 @@ final class Annotations {
             w.view.color = color
             w.view.lineWidth = lineWidth
             w.view.fadeAfter = fadeAfter
+            w.view.onChange = onChange
             w.cover(screen)
             w.setDrawing(drawing)
             if shown { w.orderFrontRegardless() }
@@ -892,7 +930,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
 
     /// 録画に映す NoGreenBack のウィンドウ (重ねた人物・手書き・全画面出力)
     var recordedWindowNumbers: [Int] {
-        var n = (annotation?.windows.map(\.windowNumber) ?? [])
+        // 全画面出力の上の手書きは、出力の映像の中にも入っているので録画から外す (線が二重にならないように)
+        let covered = outputWindow != nil ? annotation?.window(for: outputScreen) : nil
+        var n = (annotation?.windows.filter { $0 !== covered }.map(\.windowNumber) ?? [])
         if let overlay { n.append(overlay.windowNumber) }
         if let outputWindow { n.append(outputWindow.windowNumber) }
         // デスクトップの字幕は録画に焼き込まない (字幕は .srt ファイルとして別に残す)
@@ -922,6 +962,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
     var bgDevices: [AVCaptureDevice] = []
     var outputCheck = NSButton()
     var outputScreenPopup = NSPopUpButton()
+    var aspectPopup = NSPopUpButton()
+    /// 合成した映像の比率を「出す画面」に合わせるか (オフならカメラの比率のまま)
+    var matchOutputAspect: Bool {
+        get { UserDefaults.standard.object(forKey: "matchOutputAspect") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "matchOutputAspect") }
+    }
     var outputWindow: OutputWindow?
     /// 背景にする映像の uniqueID (nil なら背景なし)
     var backgroundID: String? {
@@ -1230,6 +1276,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         annotation.color = penColors[penColorIndex].color
         annotation.lineWidth = CGFloat(penWidth)
         annotation.fadeAfter = fadeTimes[fadeIndex].seconds
+        annotation.onChange = { [weak self] view in self?.annotationChanged(view) }
         annotation.coverAllScreens()
         annotationCheck = toolbarToggle("手書き", #selector(annotationToggled(_:)))
         annotationCheck.state = annotationOn ? .on : .off
@@ -1266,6 +1313,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         outputCheck.toolTip = "合成した映像を、選んだ画面いっぱいに表示します。Esc か \(HotKeys.modifierSymbols)F で閉じます"
         outputScreenPopup.target = self
         outputScreenPopup.action = #selector(outputScreenChanged(_:))
+        aspectPopup.addItems(withTitles: ["出す画面に合わせる", "カメラと同じ"])
+        aspectPopup.selectItem(at: matchOutputAspect ? 0 : 1)
+        aspectPopup.target = self
+        aspectPopup.action = #selector(aspectChanged(_:))
+        aspectPopup.toolTip = "背景と人物を合成した映像の横縦比。「出す画面に合わせる」なら、プロジェクターや外部モニターに全画面で出したときに上下や左右が黒くなりません"
+        updateCanvasAspect()
         recordScreenPopup.target = self
         recordScreenPopup.action = #selector(recordScreenChanged(_:))
         recordScreenPopup.toolTip = "「● 録画開始」で録画する画面"
@@ -1398,7 +1451,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
             sectionHeader("人物の位置と大きさ"),
             sideGrid([("位置", cornerPopup), ("大きさ", sizeSlider), ("表示する画面", screenPopup)]),
             sectionHeader("背景と全画面出力"),
-            sideGrid([("背景映像", bgPopup), ("出す画面", outputScreenPopup)]),
+            sideGrid([("背景映像", bgPopup), ("出す画面", outputScreenPopup), ("映像の比率", aspectPopup)]),
             sectionHeader("手書き"),
             sideGrid([("描くキー", keyPopup), ("色", penRow), ("太さ", widthSlider)]),
             sectionHeader("字幕の置き換え"),
@@ -1799,6 +1852,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         }
         updateOverlayVisibility()
         updateRecordedWindows()
+        refreshAnnotationImage()
     }
 
     func placeOutput() {
@@ -1821,6 +1875,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         }
         lastScreenCount = NSScreen.screens.count
         refreshScreens()
+        updateCanvasAspect()
         placeOverlay()
         placeOutput()
         // 画面を背景にしているときは、画面の一覧と取り込みを作り直す
@@ -1834,7 +1889,71 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
 
     @objc func outputScreenChanged(_ sender: NSPopUpButton) {
         outputScreenName = sender.titleOfSelectedItem
+        updateCanvasAspect()
         placeOutput()
+    }
+
+    @objc func aspectChanged(_ sender: NSPopUpButton) {
+        matchOutputAspect = sender.indexOfSelectedItem == 0
+        updateCanvasAspect()
+    }
+
+    /// 合成した映像の比率を、出す画面 (外部モニターなど) の比率にそろえる
+    func updateCanvasAspect() {
+        let f = outputScreen.frame
+        settings.canvasAspect = matchOutputAspect && f.height > 0 ? Double(f.width / f.height) : 0
+        // 映像の大きさが変わるので、手書きの線も描き直す (次のフレームで大きさが決まってから)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.refreshAnnotationImage() }
+    }
+
+    // MARK: 全画面出力の上の手書きを映像に入れる
+
+    func refreshAnnotationImage() {
+        guard let view = annotation?.window(for: outputScreen)?.view else { processor.annotationImage = nil; return }
+        annotationChanged(view)
+    }
+
+    /// 全画面出力の画面で描いた線を、合成した映像の座標に直して画像にする
+    func annotationChanged(_ view: AnnotationView) {
+        guard outputWindow != nil, annotation.isShown,
+              view.window === annotation.window(for: outputScreen) else {
+            if view.window === annotation?.window(for: outputScreen) { processor.annotationImage = nil }
+            return
+        }
+        guard !view.strokes.isEmpty, let canvas = processor.latestImage?.extent, canvas.width > 0 else {
+            processor.annotationImage = nil
+            return
+        }
+        // 全画面出力は、映像を画面に収まるように拡大して真ん中に出している。その逆をたどる
+        let screen = view.bounds.size
+        let s = min(screen.width / canvas.width, screen.height / canvas.height)
+        let tx = (screen.width - canvas.width * s) / 2, ty = (screen.height - canvas.height * s) / 2
+        let w = Int(canvas.width), h = Int(canvas.height)
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+        ctx.translateBy(x: 0, y: 0)
+        ctx.scaleBy(x: 1 / s, y: 1 / s)
+        ctx.translateBy(x: -tx, y: -ty)
+        ctx.setLineCap(.round)
+        ctx.setLineJoin(.round)
+        let now = Date()
+        for stroke in view.strokes {
+            var alpha: CGFloat = 1
+            if view.fadeAfter > 0, let f = stroke.finished {
+                alpha = CGFloat(min(1, max(0, (view.fadeAfter - now.timeIntervalSince(f)) / 0.5)))
+            }
+            guard alpha > 0, let first = stroke.points.first else { continue }
+            ctx.setStrokeColor(stroke.color.withAlphaComponent(alpha).cgColor)
+            ctx.setLineWidth(stroke.width)
+            ctx.beginPath()
+            ctx.move(to: first)
+            if stroke.points.count == 1 { ctx.addLine(to: first) }
+            for p in stroke.points.dropFirst() { ctx.addLine(to: p) }
+            ctx.strokePath()
+        }
+        guard let cg = ctx.makeImage() else { return }
+        processor.annotationImage = CIImage(cgImage: cg)
     }
 
     /// 全画面出力が同じ画面に出ている間は、重ねる表示を隠す (出力の中にもう人物が入っているので)
@@ -2125,9 +2244,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         annotationTimer?.invalidate()
         annotationTimer = nil
         annotation.setDrawing(false)
-        guard on else { annotation.orderOut(); return }
+        guard on else { annotation.orderOut(); refreshAnnotationImage(); return }
         annotation.coverAllScreens()
         annotation.orderFront()
+        refreshAnnotationImage()
         // キーの状態を見て描画モードを切り替える。NSEvent.modifierFlags は
         // 他のアプリが前面でも読めて、アクセシビリティの許可も要らない
         var frontCount = 0
