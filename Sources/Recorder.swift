@@ -177,7 +177,8 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
     }
 
     /// 録画を止めてファイルを閉じる。書き出したファイルの場所を返す
-    func stop() async -> URL? {
+    /// - Parameter subtitles: 録画中に確定した字幕。あれば、動画に字幕トラックとして入れる
+    func stop(subtitles: [SubtitleFile.Cue] = []) async -> URL? {
         if let stream { try? await stream.stopCapture() }
         stream = nil
         audioSession?.stopRunning()
@@ -190,8 +191,11 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
         guard let writer else { return nil }
         if started {
             await writer.finishWriting()
-            if writer.status == .completed, let mov = url, let mp4 = await Self.remuxToMP4(mov) {
-                self.url = mp4
+            if writer.status == .completed, let mov = url {
+                // 字幕付きで詰め替え、失敗したら字幕なしでもう一度
+                var mp4 = await Self.remuxToMP4(mov, subtitles: subtitles)
+                if mp4 == nil, !subtitles.isEmpty { mp4 = await Self.remuxToMP4(mov) }
+                if let mp4 { self.url = mp4 }
             }
         } else {
             // 1 フレームも届かなかった (画面に変化がなかった等) 場合は空ファイルを消す
@@ -207,10 +211,18 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
 
     /// .mov を再圧縮せずに .mp4 へ詰め替える。成功したら .mov を消して .mp4 の場所を返す
     /// (失敗したときは .mov をそのまま残す)
-    static func remuxToMP4(_ mov: URL) async -> URL? {
+    static func remuxToMP4(_ mov: URL, subtitles: [SubtitleFile.Cue] = []) async -> URL? {
         let mp4 = mov.deletingPathExtension().appendingPathExtension("mp4")
         let asset = AVURLAsset(url: mov)
-        guard let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else { return nil }
+        // 字幕があれば、映像・音声に字幕トラックを足した組み合わせを書き出す (うまくいかなければ字幕なし)
+        var source: AVAsset = asset
+        var subFile: URL?
+        if !subtitles.isEmpty, let comp = await withSubtitleTrack(asset, subtitles: subtitles, tempNear: mov) {
+            source = comp.asset
+            subFile = comp.file
+        }
+        defer { if let subFile { try? FileManager.default.removeItem(at: subFile) } }
+        guard let export = AVAssetExportSession(asset: source, presetName: AVAssetExportPresetPassthrough) else { return nil }
         export.outputURL = mp4
         export.outputFileType = .mp4
         export.shouldOptimizeForNetworkUse = true   // 先頭に目次を置く (読み込みが速い)
@@ -221,6 +233,34 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
         }
         try? FileManager.default.removeItem(at: mov)
         return mp4
+    }
+
+    /// 録画 (.mov) の映像・音声に、字幕トラックを足した組み合わせを作る
+    private static func withSubtitleTrack(_ asset: AVURLAsset, subtitles: [SubtitleFile.Cue],
+                                          tempNear mov: URL) async -> (asset: AVAsset, file: URL)? {
+        let subURL = mov.deletingPathExtension().appendingPathExtension("subtitles.mov")
+        do {
+            let duration = try await asset.load(.duration).seconds
+            try await SubtitleTrack.write(subtitles, duration: duration, to: subURL)
+            let comp = AVMutableComposition()
+            for t in try await asset.loadTracks(withMediaType: .video) + asset.loadTracks(withMediaType: .audio) {
+                guard let ct = comp.addMutableTrack(withMediaType: t.mediaType, preferredTrackID: kCMPersistentTrackID_Invalid) else { continue }
+                try ct.insertTimeRange(try await t.load(.timeRange), of: t, at: .zero)
+            }
+            let subAsset = AVURLAsset(url: subURL)
+            guard let st = try await subAsset.loadTracks(withMediaType: .subtitle).first,
+                  let ct = comp.addMutableTrack(withMediaType: .subtitle, preferredTrackID: kCMPersistentTrackID_Invalid) else {
+                try? FileManager.default.removeItem(at: subURL)
+                return nil
+            }
+            try ct.insertTimeRange(try await st.load(.timeRange), of: st, at: .zero)
+            ct.languageCode = "jpn"
+            ct.extendedLanguageTag = "ja"
+            return (comp, subURL)
+        } catch {
+            try? FileManager.default.removeItem(at: subURL)
+            return nil
+        }
     }
 
     // MARK: 画面のフレーム

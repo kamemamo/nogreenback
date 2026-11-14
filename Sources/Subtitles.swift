@@ -22,6 +22,8 @@ final class SubtitleEngine: NSObject, AVCaptureAudioDataOutputSampleBufferDelega
     var onText: ((String) -> Void)?
     /// 使えないときの知らせ。メインスレッドで呼ぶ
     var onError: ((String) -> Void)?
+    /// 文が確定したときの知らせ (字幕ファイル用)。メインスレッドで呼ぶ
+    var onFinal: ((String) -> Void)?
 
     /// macOS 26 以降の新しい認識 (ModernTranscriber)。「音声入力」の設定がオフでも使える
     private var modern: AnyObject?
@@ -40,6 +42,7 @@ final class SubtitleEngine: NSObject, AVCaptureAudioDataOutputSampleBufferDelega
             m.terms = terms
             m.onText = { [weak self] in self?.onText?($0) }
             m.onError = { [weak self] in self?.onError?($0) }
+            m.onFinal = { [weak self] in self?.onFinal?($0) }
             modern = m
             m.start(microphone: microphone)
             return
@@ -105,7 +108,10 @@ final class SubtitleEngine: NSObject, AVCaptureAudioDataOutputSampleBufferDelega
             if let result {
                 let text = result.bestTranscription.formattedString
                 self.queue.async { self.failures = 0 }
-                DispatchQueue.main.async { self.onText?(text) }
+                DispatchQueue.main.async {
+                    self.onText?(text)
+                    if result.isFinal, !text.isEmpty { self.onFinal?(text) }
+                }
             }
             if let error {
                 NSLog("NoGreenBack subtitles error: \(error as NSError)")
@@ -142,6 +148,7 @@ final class SubtitleEngine: NSObject, AVCaptureAudioDataOutputSampleBufferDelega
 final class ModernTranscriber: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @unchecked Sendable {
     var onText: ((String) -> Void)?
     var onError: ((String) -> Void)?
+    var onFinal: ((String) -> Void)?
 
     private let queue = DispatchQueue(label: "subtitles-modern")
     private var session: AVCaptureSession?
@@ -254,7 +261,11 @@ final class ModernTranscriber: NSObject, AVCaptureAudioDataOutputSampleBufferDel
         } else {
             shown = committed + text
         }
-        DispatchQueue.main.async { self.onText?(shown) }
+        let final = isFinal ? text.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        DispatchQueue.main.async {
+            self.onText?(shown)
+            if !final.isEmpty { self.onFinal?(final) }
+        }
     }
 
     func stop() {
@@ -400,5 +411,120 @@ final class SubtitleWindow: NSPanel {
         label.frame = NSRect(x: pad, y: pad, width: w - pad * 2, height: h - pad * 2)
         box.layer?.cornerRadius = fontSize * 0.25
         orderFrontRegardless()
+    }
+}
+
+/// 字幕ファイル (SRT) を作る
+enum SubtitleFile {
+    struct Cue { var start: TimeInterval; var end: TimeInterval; var text: String }
+
+    /// 画面の字幕と同じ形に分ける: 1 行 26 文字で折り返し、2 行を超える長い文は
+    /// 2 行ずつに区切って、文字数に応じて時間を分けて順に出す
+    static func split(_ cues: [Cue]) -> [Cue] {
+        let perLine = SubtitleRenderer.lineLength
+        let perCue = perLine * SubtitleRenderer.maxLines
+        var result: [Cue] = []
+        for c in cues {
+            let chars = Array(c.text.trimmingCharacters(in: .whitespacesAndNewlines))
+            guard !chars.isEmpty else { continue }
+            let span = max(c.end - c.start, 0.5)
+            var k = 0
+            while k < chars.count {
+                let piece = Array(chars[k..<min(k + perCue, chars.count)])
+                let lines = stride(from: 0, to: piece.count, by: perLine).map {
+                    String(piece[$0..<min($0 + perLine, piece.count)])
+                }
+                let start = c.start + span * Double(k) / Double(chars.count)
+                let end = c.start + span * Double(k + piece.count) / Double(chars.count)
+                result.append(Cue(start: start, end: end, text: lines.joined(separator: "\n")))
+                k += perCue
+            }
+        }
+        return result
+    }
+
+    static func srt(_ cues: [Cue]) -> String {
+        func stamp(_ t: TimeInterval) -> String {
+            let ms = Int((max(0, t) * 1000).rounded())
+            return String(format: "%02d:%02d:%02d,%03d", ms / 3_600_000, ms / 60_000 % 60, ms / 1000 % 60, ms % 1000)
+        }
+        return split(cues).enumerated().map { i, c in
+            "\(i + 1)\n\(stamp(c.start)) --> \(stamp(max(c.end, c.start + 0.3)))\n\(c.text)\n"
+        }.joined(separator: "\n")
+    }
+}
+
+/// 動画に入れる字幕トラック (3GPP 字幕 / tx3g)。再生するときにオン・オフできる
+enum SubtitleTrack {
+    /// 3GPP 字幕 (tx3g) のサンプルの説明
+    static func formatDescription() -> CMFormatDescription? {
+        var d = Data()
+        func u8(_ v: UInt8) { d.append(v) }
+        func u16(_ v: UInt16) { d.append(UInt8(v >> 8)); d.append(UInt8(v & 0xff)) }
+        func u32(_ v: UInt32) { u16(UInt16(v >> 16)); u16(UInt16(v & 0xffff)) }
+        func tag(_ s: String) { d.append(contentsOf: Array(s.utf8)) }
+        let fontName = "Hiragino Sans"
+        let ftabSize = 4 + 4 + 2 + 2 + 1 + fontName.utf8.count
+        let total = 8 + 6 + 2 + 4 + 1 + 1 + 4 + 8 + 12 + ftabSize
+        u32(UInt32(total)); tag("tx3g")
+        d.append(contentsOf: [0, 0, 0, 0, 0, 0]); u16(1)          // reserved, data reference index
+        u32(0)                                                    // display flags
+        u8(1); u8(0xff)                                           // 横: 中央, 縦: 下
+        u32(0x00000000)                                           // 背景色 (透明)
+        u16(0); u16(0); u16(0); u16(0)                            // text box
+        u16(0); u16(0); u16(1); u8(0); u8(18); u32(0xffffffff)    // style: font 1, size 18, 白
+        u32(UInt32(ftabSize)); tag("ftab"); u16(1); u16(1); u8(UInt8(fontName.utf8.count)); tag(fontName)
+        var fmt: CMFormatDescription?
+        let status = d.withUnsafeBytes { p in
+            CMTextFormatDescriptionCreateFromBigEndianTextDescriptionData(
+                allocator: kCFAllocatorDefault, bigEndianTextDescriptionData: p.bindMemory(to: UInt8.self).baseAddress!,
+                size: d.count, flavor: nil, mediaType: kCMMediaType_Subtitle, formatDescriptionOut: &fmt)
+        }
+        return fmt
+    }
+
+    static func sample(_ text: String, start: Double, duration: Double, format: CMFormatDescription) -> CMSampleBuffer? {
+        let utf8 = Array(text.utf8)
+        var bytes: [UInt8] = [UInt8(utf8.count >> 8), UInt8(utf8.count & 0xff)] + utf8
+        var block: CMBlockBuffer?
+        guard CMBlockBufferCreateWithMemoryBlock(allocator: kCFAllocatorDefault, memoryBlock: nil, blockLength: bytes.count,
+                                                 blockAllocator: kCFAllocatorDefault, customBlockSource: nil, offsetToData: 0,
+                                                 dataLength: bytes.count, flags: kCMBlockBufferAssureMemoryNowFlag,
+                                                 blockBufferOut: &block) == noErr, let block else { return nil }
+        CMBlockBufferReplaceDataBytes(with: &bytes, blockBuffer: block, offsetIntoDestination: 0, dataLength: bytes.count)
+        var timing = CMSampleTimingInfo(duration: CMTime(seconds: duration, preferredTimescale: 1000),
+                                        presentationTimeStamp: CMTime(seconds: start, preferredTimescale: 1000),
+                                        decodeTimeStamp: .invalid)
+        var size = bytes.count
+        var sb: CMSampleBuffer?
+        CMSampleBufferCreate(allocator: kCFAllocatorDefault, dataBuffer: block, dataReady: true, makeDataReadyCallback: nil,
+                             refcon: nil, formatDescription: format, sampleCount: 1, sampleTimingEntryCount: 1,
+                             sampleTimingArray: &timing, sampleSizeEntryCount: 1, sampleSizeArray: &size, sampleBufferOut: &sb)
+        return sb
+    }
+
+    /// 字幕だけの .mov を作る (字幕のない時間は空のサンプルで埋める)
+    static func write(_ cues: [SubtitleFile.Cue], duration: Double, to url: URL) async throws {
+        try? FileManager.default.removeItem(at: url)
+        guard let fmt = formatDescription() else { throw NSError(domain: "sub", code: 1) }
+        let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+        let input = AVAssetWriterInput(mediaType: .subtitle, outputSettings: nil, sourceFormatHint: fmt)
+        input.expectsMediaDataInRealTime = false
+        writer.add(input)
+        writer.startWriting()
+        writer.startSession(atSourceTime: .zero)
+        var t = 0.0
+        for c in SubtitleFile.split(cues).sorted(by: { $0.start < $1.start }) {
+            let s = max(c.start, t), e = min(max(c.end, s + 0.3), duration)
+            guard e > s else { continue }
+            if s > t, let gap = sample("", start: t, duration: s - t, format: fmt) { while !input.isReadyForMoreMediaData { try await Task.sleep(nanoseconds: 1_000_000) }; input.append(gap) }
+            if let sb = sample(c.text, start: s, duration: e - s, format: fmt) { while !input.isReadyForMoreMediaData { try await Task.sleep(nanoseconds: 1_000_000) }; input.append(sb) }
+            t = e
+        }
+        if duration > t, let gap = sample("", start: t, duration: duration - t, format: fmt) { while !input.isReadyForMoreMediaData { try await Task.sleep(nanoseconds: 1_000_000) }; input.append(gap) }
+        input.markAsFinished()
+        writer.endSession(atSourceTime: CMTime(seconds: duration, preferredTimescale: 1000))
+        await writer.finishWriting()
+        if writer.status != .completed { throw writer.error ?? NSError(domain: "sub", code: 2) }
     }
 }

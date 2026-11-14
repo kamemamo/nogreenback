@@ -826,6 +826,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
     let subtitles = SubtitleEngine()
     /// デスクトップに出す字幕 (録画にも映る)
     lazy var subtitleWindow = SubtitleWindow()
+    /// 録画中に確定した字幕 (録画を止めたら .srt に保存する)
+    var subtitleCues: [SubtitleFile.Cue] = []
+    var recordingSubtitles = false
+    /// 今話している文が出始めた時刻
+    var utteranceStart: Date?
     var subtitleClearTimer: Timer?
     let termsView = NSTextView()
     var termsSaveTimer: Timer?
@@ -860,7 +865,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         var n = (annotation?.windows.map(\.windowNumber) ?? [])
         if let overlay { n.append(overlay.windowNumber) }
         if let outputWindow { n.append(outputWindow.windowNumber) }
-        n.append(subtitleWindow.windowNumber)
+        // デスクトップの字幕は録画に焼き込まない (字幕は .srt ファイルとして別に残す)
         return n
     }
 
@@ -1272,6 +1277,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         subtitleButton.toolTip = "話した言葉を文字にして、映像の下に出します (試作)。認識は Mac の中で行います"
         subtitles.terms = subtitleTermList
         subtitles.onText = { [weak self] text in self?.showSubtitle(text) }
+        subtitles.onFinal = { [weak self] text in self?.subtitleFinalized(text) }
         subtitles.onError = { [weak self] msg in
             self?.subtitleButton.state = .off
             self?.subtitles.stop()
@@ -1987,6 +1993,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
             recordLabel.stringValue = "保存中…"
             recordingPanel?.orderOut(nil)
             recordingPanel = nil
+            // ここまでに確定した字幕を、録画と同じ名前の .srt にする
+            recordingSubtitles = false
+            let cues = subtitleCues
+            subtitleCues = []
             // しまっていた操作ウィンドウを戻す
             if windowHiddenForRecording {
                 windowHiddenForRecording = false
@@ -1995,7 +2005,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
                 NSApp.activate(ignoringOtherApps: true)
             }
             Task { @MainActor in
-                let url = await rec.stop()
+                let url = await rec.stop(subtitles: cues)
                 self.recorder = nil
                 self.startMeter()
                 self.recordTimer?.invalidate()
@@ -2003,6 +2013,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
                 self.recordButton.title = "● 録画開始"
                 self.recordButton.state = .off
                 self.recordButton.isEnabled = true
+                if let url, !cues.isEmpty {
+                    let srt = url.deletingPathExtension().appendingPathExtension("srt")
+                    try? SubtitleFile.srt(cues).write(to: srt, atomically: true, encoding: .utf8)
+                }
                 if let url { NSWorkspace.shared.activateFileViewerSelecting([url]) }
                 else { self.showAlert("画面に変化がなかったため、録画は保存されませんでした。") }
                 if url != nil, rec.recordsAudio, rec.audioSamplesWritten == 0 {
@@ -2041,6 +2055,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
                         self.window.miniaturize(nil)
                     }
                     self.recordStart = Date()
+                    self.subtitleCues = []
+                    self.recordingSubtitles = true
                     self.recordLabel.stringValue = "0:00"
                     let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
                         guard let self else { return }
@@ -2149,9 +2165,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         }
     }
 
+    /// 文が確定したら、録画中なら字幕ファイル用に時刻と一緒に残す
+    func subtitleFinalized(_ text: String) {
+        let end = Date()
+        let start = utteranceStart ?? end.addingTimeInterval(-2)
+        utteranceStart = nil
+        guard recordingSubtitles else { return }
+        subtitleCues.append(.init(start: start.timeIntervalSince(recordStart),
+                                  end: end.timeIntervalSince(recordStart), text: text))
+    }
+
     /// 字幕を出し、しばらく話さなければ消す
     func showSubtitle(_ text: String) {
         guard subtitleButton.state == .on else { return }
+        if utteranceStart == nil, !text.isEmpty { utteranceStart = Date() }
         setSubtitle(text)
         subtitleClearTimer?.invalidate()
         subtitleClearTimer = Timer.scheduledTimer(withTimeInterval: 4, repeats: false) { [weak self] _ in
