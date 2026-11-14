@@ -99,8 +99,9 @@ final class ScreenFeed: NSObject, SCStreamOutput, SCStreamDelegate {
     var onFrame: ((CIImage) -> Void)?
 
     func start(screen: NSScreen, keepWindows: [Int]) async throws {
-        // 画面収録の許可がない場合、ここで macOS が許可を求める (または失敗する)
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        // 画面収録の許可がない場合、ここで macOS が許可を求める (または失敗する)。
+        // 画面に出ていないウィンドウも含めて取る (起動直後などで、自分のアプリが一覧から漏れないように)
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         let displayID = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
         guard let display = content.displays.first(where: { $0.displayID == displayID }) else {
             throw NSError(domain: "NoGreenBack", code: 1,
