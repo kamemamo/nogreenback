@@ -713,6 +713,58 @@ final class ToggleButton: NSButton {
     }
 }
 
+/// 録画中に操作ウィンドウを Dock にしまっている間だけ出す、小さな停止ボタン。
+/// 録画には映らない (録画の対象から外す)。ドラッグで動かせる
+final class RecordingPanel: NSPanel {
+    let timeLabel = NSTextField(labelWithString: "0:00")
+
+    init(target: AnyObject, action: Selector) {
+        super.init(contentRect: NSRect(x: 0, y: 0, width: 168, height: 44),
+                   styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        let back = NSVisualEffectView()
+        back.material = .hudWindow
+        back.state = .active
+        back.wantsLayer = true
+        back.layer?.cornerRadius = 22
+        back.layer?.masksToBounds = true
+        let button = ToggleButton(title: "■ 録画停止", target: target, action: action)
+        button.onColor = .systemRed
+        button.state = .on
+        button.toolTip = "録画を止めて、操作ウィンドウを戻します (\(HotKeys.modifierSymbols)R)"
+        timeLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+        timeLabel.textColor = .white
+        let row = NSStackView(views: [button, timeLabel])
+        row.spacing = 8
+        row.edgeInsets = NSEdgeInsets(top: 7, left: 7, bottom: 7, right: 14)
+        row.translatesAutoresizingMaskIntoConstraints = false
+        back.addSubview(row)
+        NSLayoutConstraint.activate([
+            row.leadingAnchor.constraint(equalTo: back.leadingAnchor),
+            row.trailingAnchor.constraint(equalTo: back.trailingAnchor),
+            row.topAnchor.constraint(equalTo: back.topAnchor),
+            row.bottomAnchor.constraint(equalTo: back.bottomAnchor),
+        ])
+        contentView = back
+        setContentSize(back.fittingSize)
+        backgroundColor = .clear
+        isOpaque = false
+        hasShadow = true
+        isMovableByWindowBackground = true
+        hidesOnDeactivate = false
+        isReleasedWhenClosed = false
+        // 全画面出力 (メニューバーの 1 つ上) よりさらに手前に出す
+        level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.mainMenuWindow)) + 2)
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+    }
+
+    /// 画面の右上 (メニューバーの下) に出す
+    func show(on screen: NSScreen) {
+        let v = screen.visibleFrame
+        setFrameOrigin(NSPoint(x: v.maxX - frame.width - 16, y: v.maxY - frame.height - 12))
+        orderFrontRegardless()
+    }
+}
+
 /// 上から下へ並べるための、座標が上から始まるビュー (サイドバーのスクロール用)
 final class FlippedView: NSView { override var isFlipped: Bool { true } }
 
@@ -764,6 +816,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var recordButton = ToggleButton()
     var recordLabel = NSTextField(labelWithString: "")
     var recordStart = Date()
+    /// 録画のあいだ操作ウィンドウを Dock にしまったか (止めたら戻す)
+    var windowHiddenForRecording = false
+    var recordingPanel: RecordingPanel?
+
+    /// 録画に映す NoGreenBack のウィンドウ (重ねた人物・手書き・全画面出力)
+    var recordedWindowNumbers: [Int] {
+        var n = (annotation?.windows.map(\.windowNumber) ?? [])
+        if let overlay { n.append(overlay.windowNumber) }
+        if let outputWindow { n.append(outputWindow.windowNumber) }
+        return n
+    }
+
+    /// 録画中に映すウィンドウが変わったら、録画の対象を更新する
+    func updateRecordedWindows() {
+        guard #available(macOS 12.3, *), let rec = recorder as? ScreenRecorder else { return }
+        let numbers = recordedWindowNumbers
+        Task { await rec.updateKeptWindows(numbers) }
+    }
     var recordTimer: Timer?
     var recordMic: Bool {
         get { UserDefaults.standard.object(forKey: "recordMic") as? Bool ?? true }
@@ -1531,23 +1601,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ?? NSScreen.screens.dropFirst().first ?? NSScreen.screens[0]
     }
 
+    /// 背景の選択肢: なし / この Mac の画面 / カメラやキャプチャー機器。
+    /// 項目の representedObject に、保存用の ID (画面は "screen:名前"、機器は uniqueID) を入れる
     func refreshBackgrounds() {
         var types: [AVCaptureDevice.DeviceType] = [.builtInWideAngleCamera]
         if #available(macOS 14.0, *) { types += [.external, .continuityCamera] }
         else { types.append(.externalUnknown) }
         bgDevices = AVCaptureDevice.DiscoverySession(deviceTypes: types, mediaType: .video,
                                                      position: .unspecified).devices
-        bgPopup.removeAllItems()
-        bgPopup.addItem(withTitle: "なし（透明）")
-        bgPopup.addItems(withTitles: bgDevices.map(\.localizedName))
-        let i = bgDevices.firstIndex { $0.uniqueID == backgroundID }
-        bgPopup.selectItem(at: i.map { $0 + 1 } ?? 0)
+        let menu = NSMenu()
+        menu.addItem(NSMenuItem(title: "なし（透明）", action: nil, keyEquivalent: ""))
+        if #available(macOS 12.3, *) {
+            menu.addItem(.separator())
+            for screen in NSScreen.screens {
+                let item = NSMenuItem(title: "画面: \(screen.localizedName)", action: nil, keyEquivalent: "")
+                item.representedObject = "screen:" + screen.localizedName
+                menu.addItem(item)
+            }
+        }
+        if !bgDevices.isEmpty { menu.addItem(.separator()) }
+        for d in bgDevices {
+            let item = NSMenuItem(title: d.localizedName, action: nil, keyEquivalent: "")
+            item.representedObject = d.uniqueID
+            menu.addItem(item)
+        }
+        bgPopup.menu = menu
+        let i = backgroundID.flatMap { id in menu.items.firstIndex { $0.representedObject as? String == id } }
+        bgPopup.selectItem(at: i ?? 0)
         applyBackground()
     }
 
-    func applyBackground() {
-        let i = bgPopup.indexOfSelectedItem
-        let device = i > 0 && i - 1 < bgDevices.count ? bgDevices[i - 1] : nil
+    /// 選んでいる背景を使い始める (restartScreen: 画面の構成が変わったときに、画面の取り込みをやり直す)
+    func applyBackground(restartScreen: Bool = false) {
+        let id = bgPopup.selectedItem?.representedObject as? String
+        if let id, id.hasPrefix("screen:") {
+            let name = String(id.dropFirst("screen:".count))
+            guard let screen = NSScreen.screens.first(where: { $0.localizedName == name }) else { return }
+            if !restartScreen, processor.background.screenName == name { return }
+            // 手書きの線は背景にも映す (全画面出力に手書きが入るように)
+            let keep = annotation?.windows.map(\.windowNumber) ?? []
+            processor.background.startScreen(screen, keepWindows: keep) { [weak self] msg in
+                self?.showAlert("画面を背景にできません: \(msg)\n\n初回は「システム設定 > プライバシーとセキュリティ > 画面収録」で NoGreenBack を許可し、アプリを開き直してください。")
+                self?.bgPopup.selectItem(at: 0)
+                try? self?.processor.background.start(nil)
+            }
+            return
+        }
+        let device = bgDevices.first { $0.uniqueID == id }
         do {
             try processor.background.start(device)
         } catch {
@@ -1558,8 +1658,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func backgroundChanged(_ sender: NSPopUpButton) {
-        let i = sender.indexOfSelectedItem
-        backgroundID = i > 0 ? bgDevices[i - 1].uniqueID : nil
+        backgroundID = sender.selectedItem?.representedObject as? String
         applyBackground()
     }
 
@@ -1580,6 +1679,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             outputWindow = nil
         }
         updateOverlayVisibility()
+        updateRecordedWindows()
     }
 
     func placeOutput() {
@@ -1604,6 +1704,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshScreens()
         placeOverlay()
         placeOutput()
+        // 画面を背景にしているときは、画面の一覧と取り込みを作り直す
+        if processor.background.screenName != nil || backgroundID?.hasPrefix("screen:") == true {
+            refreshBackgrounds()
+            applyBackground(restartScreen: true)
+        }
+        // 手書きのウィンドウが作り直されることがあるので、録画の対象も更新する
+        updateRecordedWindows()
     }
 
     @objc func outputScreenChanged(_ sender: NSPopUpButton) {
@@ -1805,6 +1912,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // 停止 (MP4 への詰め替えが終わるまで「保存中」と出す)
             recordTimer?.invalidate()
             recordLabel.stringValue = "保存中…"
+            recordingPanel?.orderOut(nil)
+            recordingPanel = nil
+            // しまっていた操作ウィンドウを戻す
+            if windowHiddenForRecording {
+                windowHiddenForRecording = false
+                window.deminiaturize(nil)
+                window.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+            }
             Task { @MainActor in
                 let url = await rec.stop()
                 self.recorder = nil
@@ -1827,10 +1943,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.showAlert(msg)
                 if self?.recorder != nil { self?.recordToggled() }
             }
+            // 操作ウィンドウと同じ画面を録画するとき (モニターが 1 台のときなど) は、
+            // 録画中はウィンドウを Dock にしまい、代わりに小さな停止ボタンを出す。
+            // 停止ボタンは録画に映らないよう、録画を始める前に出しておいて対象から外す
+            let hideWindow = window.screen == recordScreen && !window.isMiniaturized
+            if hideWindow {
+                let panel = RecordingPanel(target: self, action: #selector(recordToggled))
+                panel.show(on: recordScreen)
+                recordingPanel = panel
+            }
             Task { @MainActor in
                 do {
                     _ = try await rec.start(screen: self.recordScreen,
-                                            excluding: [self.window.windowNumber],
+                                            keeping: self.recordedWindowNumbers,
                                             microphone: self.selectedMic,
                                             settings: self.recordSettings)
                     self.recorder = rec
@@ -1838,18 +1963,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.micMeter.stop()
                     self.recordButton.title = "■ 録画停止"
                     self.recordButton.state = .on
+                    if hideWindow {
+                        self.windowHiddenForRecording = true
+                        self.window.miniaturize(nil)
+                    }
                     self.recordStart = Date()
                     self.recordLabel.stringValue = "0:00"
                     let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
                         guard let self else { return }
                         let s = Int(Date().timeIntervalSince(self.recordStart))
-                        self.recordLabel.stringValue = s >= 3600
+                        let text = s >= 3600
                             ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60)
                             : String(format: "%d:%02d", s / 60, s % 60)
+                        self.recordLabel.stringValue = text
+                        self.recordingPanel?.timeLabel.stringValue = text
                     }
                     RunLoop.main.add(t, forMode: .common)
                     self.recordTimer = t
                 } catch {
+                    self.recordingPanel?.orderOut(nil)
+                    self.recordingPanel = nil
                     self.showAlert("録画を開始できません: \(error.localizedDescription)\n\n初回は「システム設定 > プライバシーとセキュリティ > 画面収録」で NoGreenBack を許可し、アプリを開き直してください。")
                 }
                 self.recordButton.isEnabled = true

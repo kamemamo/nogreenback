@@ -34,6 +34,22 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
                             AVCaptureAudioDataOutputSampleBufferDelegate, @unchecked Sendable {
     private let queue = DispatchQueue(label: "recorder", qos: .userInitiated)
     private var stream: SCStream?
+    private var display: SCDisplay?
+
+    /// NoGreenBack のウィンドウは、映すと決めたものだけを残して外す
+    /// (後から出したウィンドウも、指定しなければ映らない)
+    private static func filter(content: SCShareableContent, display: SCDisplay, keeping numbers: [Int]) -> SCContentFilter {
+        let me = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
+        let keep = content.windows.filter { numbers.contains(Int($0.windowID)) }
+        return SCContentFilter(display: display, excludingApplications: me, exceptingWindows: keep)
+    }
+
+    /// 録画中に、映すウィンドウが変わったとき (全画面出力を出したときなど) に呼ぶ
+    func updateKeptWindows(_ numbers: [Int]) async {
+        guard let stream, let display,
+              let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false) else { return }
+        try? await stream.updateContentFilter(Self.filter(content: content, display: display, keeping: numbers))
+    }
     private var writer: AVAssetWriter?
     private var videoInput: AVAssetWriterInput?
     private var audioInput: AVAssetWriterInput?
@@ -50,19 +66,20 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
 
     /// - Parameters:
     ///   - screen: 録画する画面
-    ///   - excluding: 録画に映さないウィンドウ (操作ウィンドウ) の番号
+    ///   - keeping: 録画に映す NoGreenBack のウィンドウ (重ねた人物・手書き・全画面出力) の番号。
+    ///     NoGreenBack のそれ以外のウィンドウ (操作ウィンドウや停止ボタン) は映さない
     ///   - microphone: 音声を録るマイク (nil なら音声なし)
     ///   - settings: 画質などの設定
-    func start(screen: NSScreen, excluding windowNumbers: [Int], microphone: AVCaptureDevice?,
+    func start(screen: NSScreen, keeping windowNumbers: [Int], microphone: AVCaptureDevice?,
                settings: RecordSettings) async throws -> URL {
         // 画面収録の許可がない場合、ここで macOS が許可を求める (または失敗する)
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         let displayID = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
         guard let display = content.displays.first(where: { $0.displayID == displayID }) ?? content.displays.first else {
             throw RecorderError.message("録画する画面が見つかりません")
         }
-        let excluded = content.windows.filter { windowNumbers.contains(Int($0.windowID)) }
-        let filter = SCContentFilter(display: display, excludingWindows: excluded)
+        self.display = display
+        let filter = Self.filter(content: content, display: display, keeping: windowNumbers)
 
         // 縦横比を保って長辺を設定の値以下に (エンコーダのため偶数にそろえる)
         // display.width はポイント単位なので、Retina や HiDPI の画面では実際の画素数に直す
