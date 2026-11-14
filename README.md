@@ -152,3 +152,8 @@ USB キャプチャーなどで取り込んだ映像（別の PC のスライド
 swiftc -F vendor/build -framework Syphon -Xlinker -rpath -Xlinker "$PWD/vendor/build" Tools/syphon-check.swift -o vendor/syphon-check
 ./vendor/syphon-check frame.png
 ```
+
+## ライセンス
+
+- NoGreenBack: [MIT License](LICENSE)
+- 同梱している [Syphon Framework](https://github.com/Syphon/Syphon-Framework) は BSD ライセンスです。著作権表示とライセンス文は [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) にあり、アプリの中（`NoGreenBack.app/Contents/Resources/`）にも同梱しています。

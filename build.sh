@@ -46,6 +46,8 @@ lipo -create ${bins[@]} -output "$APP/Contents/MacOS/NoGreenBack"
 cp -R "$FW_BUILD/Syphon.framework" "$APP/Contents/Frameworks/"
 # アイコン (Icons/AppIcon.svg を変えたら: swiftc Tools/render-icon.swift -o vendor/render-icon && vendor/render-icon Icons/AppIcon.svg Icons/AppIcon.icns)
 cp Icons/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+# ライセンス (Syphon の BSD ライセンスは、バイナリで配るときに著作権表示を同梱するよう求めている)
+cp LICENSE THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
