@@ -859,7 +859,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         set { UserDefaults.standard.set(newValue, forKey: "personOn") }
     }
     var personButton = NSButton()
-    // 字幕 (試作)
+    // 字幕
     var subtitleButton = NSButton()
     let subtitles = SubtitleEngine()
     /// デスクトップに出す字幕 (録画にも映る)
@@ -1357,7 +1357,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         helpButton.toolTip = "ショートカットの一覧 (⌘/)"
 
         subtitleButton = toolbarToggle("字幕", #selector(subtitleToggled(_:)))
-        subtitleButton.toolTip = "話した言葉を文字にして、映像の下に出します (試作)。認識は Mac の中で行います"
+        subtitleButton.toolTip = "話した言葉を文字にして、映像の下に出します。認識は Mac の中で行います"
         subtitles.terms = subtitleTermList
         cachedReplacements = subtitleReplacements
         subtitles.onText = { [weak self] text in
