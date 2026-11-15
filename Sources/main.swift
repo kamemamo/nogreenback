@@ -73,6 +73,10 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
     let settings: Settings
     private let seqHandler = VNSequenceRequestHandler()
     private let request = VNGeneratePersonSegmentationRequest()
+    private let frameLock = NSLock()
+    private var _lastFrameTime: CFAbsoluteTime = 0
+    /// 最後にカメラのフレームが届いた時刻 (映像が止まったのを見つけるため)
+    var lastFrameTime: CFAbsoluteTime { frameLock.withLock { _lastFrameTime } }
 
     private var outTexture: MTLTexture?
     /// 平滑化したマスクの履歴 (ピンポンバッファ)
@@ -264,6 +268,7 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        frameLock.withLock { _lastFrameTime = CFAbsoluteTimeGetCurrent() }
 
         // 1) 人物マスク生成
         let quality = settings.quality
@@ -1034,6 +1039,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     let micMeter = MicMeter()
     var micCheckTick = 0
     let micLevel = NSLevelIndicator()
+    // ATEM スイッチャーの操作 (試作)
+    let atem = ATEMControl()
+    let atemHostField = NSTextField()
+    let atemConnectButton = NSButton()
+    let atemStatus = NSTextField(labelWithString: "つないでいません")
+    let atemInputs = NSSegmentedControl()
+    let atemMixCheck = NSButton(checkboxWithTitle: "ミックス", target: nil, action: nil)
+    /// 上部に並べる ATEM の入力ボタンとミックスのチェック (つないでいる間だけ出す)
+    lazy var atemToolbarGroup: NSStackView = {
+        let label = NSTextField(labelWithString: "ATEM")
+        label.font = .systemFont(ofSize: 11, weight: .semibold)
+        label.textColor = .secondaryLabelColor
+        let g = NSStackView(views: [toolbarSeparator(), label, atemInputs, atemMixCheck])
+        g.spacing = 8
+        g.isHidden = true
+        return g
+    }()
+    var atemInputIDs: [Int] = [1, 2, 3, 4]
+    var atemProgram = 0
+    var atemHost: String {
+        get { UserDefaults.standard.string(forKey: "atemHost") ?? (ATEMControl.sdkAvailable ? "" : "192.168.10.240") }
+        set { UserDefaults.standard.set(newValue, forKey: "atemHost") }
+    }
+    /// 前回つないでいたら、起動したときにもつなぐ
+    var atemAutoConnect: Bool {
+        get { UserDefaults.standard.bool(forKey: "atemAutoConnect") }
+        set { UserDefaults.standard.set(newValue, forKey: "atemAutoConnect") }
+    }
+    var atemConnected = false
     // 外部の音声: 取り込む機器、出すスピーカー、音量
     let externalAudio = ExternalAudio()
     let extInPopup = NSPopUpButton()
@@ -1123,7 +1157,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         buildUI()
         AVCaptureDevice.requestAccess(for: .video) { ok in
             DispatchQueue.main.async {
-                if ok { self.refreshCameras(); self.startSession(); self.refreshBackgrounds() }
+                if ok { self.refreshCameras(); self.startSession(); self.watchCamera(); self.refreshBackgrounds() }
                 else { self.showAlert("カメラへのアクセスが許可されていません。\nシステム設定 > プライバシーとセキュリティ > カメラ で許可してください。") }
             }
         }
@@ -1150,6 +1184,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         // カメラなどの停止が止まったままになっても、プロセスを残さない
         DispatchQueue.global().asyncAfter(deadline: .now() + 3) { exit(0) }
         externalAudio.stop()
+        atem.disconnect()
         micMeter.stop()
         session.stopRunning()
         processor.syphon.stop()
@@ -1312,11 +1347,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
             self?.refreshExtOutputs()
         }
         for name in [AVCaptureDevice.wasConnectedNotification, AVCaptureDevice.wasDisconnectedNotification] {
-            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                self?.refreshMics()
-                self?.refreshBackgrounds()
-                self?.refreshExtInputs()
-                self?.refreshExtOutputs()
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                guard let self else { return }
+                self.refreshCameras()
+                if name == AVCaptureDevice.wasConnectedNotification,
+                   let d = note.object as? AVCaptureDevice, d.hasMediaType(.video) {
+                    if d.uniqueID == self.currentDevice?.uniqueID { self.reopenCamera(d) }
+                    if d.uniqueID == self.processor.background.device?.uniqueID {
+                        self.refreshBackgrounds()
+                        self.applyBackground(reopenDevice: true)
+                    }
+                }
+                self.refreshMics()
+                self.refreshBackgrounds()
+                self.refreshExtInputs()
+                self.refreshExtOutputs()
             }
         }
         recordLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
@@ -1438,7 +1483,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         // 上部: 本番中に触るボタンだけを並べる (オンのときは色が付く)
         let toolbar = NSStackView(views: [
             personButton, outputCheck, overlayCheck, subtitleButton, toolbarSeparator(),
-            annotationCheck, penButton, clearButton, NSView(),
+            annotationCheck, penButton, clearButton, atemToolbarGroup, NSView(),
             recordButton, recordLabel, fpsLabel, helpButton,
         ])
         toolbar.orientation = .horizontal
@@ -1504,6 +1549,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         refreshExtInputs()
         refreshExtOutputs()
         startExternal()
+        let atemSection = buildATEM()
         let tuning = sideGrid([
             ("ちらつき抑制", smoothing), ("消失の保持", hold), ("境界の締まり", tighten),
             ("境界ぼかし", feather), ("明るさ安定化", deflicker),
@@ -1558,7 +1604,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
             sideGrid([("入力", extInRow), ("スピーカー", extOutPopup), ("音量", extVolSlider),
                       ("声で下げる", duckPopup)]),
             extHint,
-        ]
+            sectionHeader("ATEM スイッチャー（試作）"),
+        ] + atemSection
         let side = NSStackView(views: sections)
         side.orientation = .vertical
         side.alignment = .leading
@@ -1720,6 +1767,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
                                                    position: .unspecified).devices
         cameraPopup.removeAllItems()
         cameraPopup.addItems(withTitles: devices.map(\.localizedName))
+        if let id = currentDevice?.uniqueID, let i = devices.firstIndex(where: { $0.uniqueID == id }) {
+            cameraPopup.selectItem(at: i)
+        }
+    }
+
+    /// カメラの映像が止まっていないか見張る。
+    /// スイッチャー (ATEM など) は映像形式を変えたときや、つないだ直後に USB の機器として
+    /// 一度消えて出直すことがあり、古いつながりのままだと一覧にあるのに映像が出なくなる
+    var cameraWatchdog: Timer?
+    var cameraStartedTime: CFAbsoluteTime = 0
+    func watchCamera() {
+        cameraWatchdog?.invalidate()
+        cameraWatchdog = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            guard let self, let id = self.currentDevice?.uniqueID else { return }
+            let last = max(self.processor.lastFrameTime, self.cameraStartedTime)
+            guard CFAbsoluteTimeGetCurrent() - last > 3,
+                  let fresh = AVCaptureDevice(uniqueID: id), fresh.isConnected else { return }
+            NSLog("camera: no frames from \(fresh.localizedName), reopening")
+            self.reopenCamera(fresh)
+        }
+        NotificationCenter.default.addObserver(forName: AVCaptureSession.runtimeErrorNotification,
+                                               object: session, queue: .main) { [weak self] note in
+            NSLog("camera: session error \(String(describing: note.userInfo?[AVCaptureSessionErrorKey]))")
+            self?.cameraStartedTime = 0   // 次の見張りで開き直す
+        }
+    }
+
+    /// 同じ機器を開き直す (止まっていたセッションも動かし直す)
+    func reopenCamera(_ device: AVCaptureDevice) {
+        configure(device: device)
+        videoQueue.async {
+            if !self.session.isRunning { self.session.startRunning() }
+            DispatchQueue.main.async { self.applyFrameRate() }
+        }
     }
 
     func startSession() {
@@ -1748,6 +1829,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
             let input = try AVCaptureDeviceInput(device: device)
             if session.canAddInput(input) { session.addInput(input) }
             currentDevice = device
+            cameraStartedTime = CFAbsoluteTimeGetCurrent()
             watchFrameRate(of: device)
             if !session.canSetSessionPreset(.hd1920x1080) { session.sessionPreset = .high }
         } catch {
@@ -1900,7 +1982,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     }
 
     /// 選んでいる背景を使い始める (restartScreen: 画面の構成が変わったときに、画面の取り込みをやり直す)
-    func applyBackground(restartScreen: Bool = false) {
+    func applyBackground(restartScreen: Bool = false, reopenDevice: Bool = false) {
         let id = bgPopup.selectedItem?.representedObject as? String
         if let id, id.hasPrefix("screen:") {
             let name = String(id.dropFirst("screen:".count))
@@ -1917,7 +1999,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         }
         let device = bgDevices.first { $0.uniqueID == id }
         do {
-            try processor.background.start(device)
+            try processor.background.start(device, force: reopenDevice)
         } catch {
             showAlert("背景映像を開けません: \(error.localizedDescription)")
             bgPopup.selectItem(at: 0)
@@ -2202,6 +2284,117 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
             micPopup.selectItem(at: 1)
         }
         startMeter()
+    }
+
+    // MARK: ATEM スイッチャー
+
+    func buildATEM() -> [NSView] {
+        atemHostField.stringValue = atemHost
+        atemHostField.placeholderString = ATEMControl.sdkAvailable ? "空欄なら USB" : "192.168.10.240"
+        atemHostField.toolTip = ATEMControl.sdkAvailable
+            ? "USB でつなぐなら空欄のまま。LAN でつなぐなら ATEM の IP アドレス (ATEM Software Control の「設定」で確認できます)"
+            : "ATEM の IP アドレス (ATEM Software Control の「設定」で確認できます)"
+        atemHostField.widthAnchor.constraint(equalToConstant: sideControlWidth - 76).isActive = true
+        atemConnectButton.bezelStyle = .rounded
+        atemConnectButton.title = "つなぐ"
+        atemConnectButton.target = self
+        atemConnectButton.action = #selector(atemConnectClicked)
+        atemConnectButton.widthAnchor.constraint(equalToConstant: 70).isActive = true
+        let hostRow = NSStackView(views: [atemHostField, atemConnectButton])
+        hostRow.spacing = 6
+        atemStatus.font = .systemFont(ofSize: 11)
+        atemStatus.textColor = .secondaryLabelColor
+        atemInputs.trackingMode = .selectOne
+        atemInputs.target = self
+        atemInputs.action = #selector(atemInputClicked(_:))
+        atemInputs.toolTip = "押した入力を本番 (PGM) に出します"
+        setATEMInputs(atemInputIDs.map { ATEMControl.Input(id: $0, name: "\($0)") })
+        atemInputs.isEnabled = false
+        atemMixCheck.state = UserDefaults.standard.bool(forKey: "atemMix") ? .on : .off
+        atemMixCheck.target = self
+        atemMixCheck.action = #selector(atemMixChanged(_:))
+        atemMixCheck.toolTip = "オンにすると、ATEM で設定している切り替え効果 (ミックスなど) で移ります。オフならすぐ切り替えます (カット)"
+
+        atem.onState = { [weak self] state, detail in
+            guard let self else { return }
+            switch state {
+            case .connected: self.atemStatus.stringValue = "つながりました" + (detail.map { "（\($0)）" } ?? "")
+            case .connecting: self.atemStatus.stringValue = detail ?? "つないでいます…"
+            case .disconnected: self.atemStatus.stringValue = "つないでいません"
+            }
+            self.atemInputs.isEnabled = state == .connected
+        }
+        atem.onInputs = { [weak self] list in
+            guard let self, !list.isEmpty else { return }
+            self.setATEMInputs(list)
+        }
+        atem.onProgram = { [weak self] src in
+            guard let self else { return }
+            self.atemProgram = src
+            self.showATEMProgram()
+        }
+        let hint = NSTextField(wrappingLabelWithString: ATEMControl.sdkAvailable
+            ? "USB でつないでいるなら「アドレス」を空欄のまま、LAN なら ATEM の IP アドレスを入れて「つなぐ」を押します。つながると、上部に入力のボタンが出ます。押した入力が本番に出ます"
+            : "ATEM を LAN ケーブルで同じネットワークにつなぎ、IP アドレスを入れて「つなぐ」を押します (USB で操作するには ATEM のソフトを入れてください)。つながると、上部に入力のボタンが出ます。押した入力が本番に出ます")
+        hint.font = .systemFont(ofSize: 11)
+        hint.textColor = .secondaryLabelColor
+        hint.preferredMaxLayoutWidth = sideControlWidth + 100
+        if atemAutoConnect { setATEMConnected(true) }
+        return [sideGrid([("アドレス", hostRow), ("", atemStatus)]), hint]
+    }
+
+    func setATEMInputs(_ list: [ATEMControl.Input]) {
+        atemInputIDs = list.map(\.id)
+        atemInputs.segmentCount = list.count
+        // 幅に収まるよう、名前が長いときは番号だけにする
+        for (i, input) in list.enumerated() {
+            atemInputs.setLabel(input.name.count <= 6 ? input.name : "\(input.id)", forSegment: i)
+            atemInputs.setToolTip(input.name, forSegment: i)
+            atemInputs.setWidth(0, forSegment: i)   // 0 = 文字に合わせる
+        }
+        showATEMProgram()
+    }
+
+    func showATEMProgram() {
+        if let i = atemInputIDs.firstIndex(of: atemProgram) {
+            atemInputs.selectedSegment = i
+        } else {
+            atemInputs.selectedSegment = -1
+        }
+    }
+
+    func setATEMConnected(_ on: Bool) {
+        atemConnected = on
+        atemAutoConnect = on
+        atemConnectButton.title = on ? "切る" : "つなぐ"
+        atemToolbarGroup.isHidden = !on
+        atemHostField.isEnabled = !on
+        if on {
+            atemHost = atemHostField.stringValue.trimmingCharacters(in: .whitespaces)
+            atem.connect(atemHost)
+        } else {
+            atem.disconnect()
+        }
+    }
+
+    @objc func atemConnectClicked() { setATEMConnected(!atemConnected) }
+
+    @objc func atemInputClicked(_ sender: NSSegmentedControl) {
+        let i = sender.selectedSegment
+        guard atemInputIDs.indices.contains(i) else { return }
+        let src = atemInputIDs[i]
+        if atemMixCheck.state == .on {
+            atem.setPreview(src)
+            atem.auto()
+        } else {
+            atem.setProgram(src)
+        }
+        // 実際に切り替わったかは ATEM からの知らせで表示し直す
+        showATEMProgram()
+    }
+
+    @objc func atemMixChanged(_ sender: NSButton) {
+        UserDefaults.standard.set(sender.state == .on, forKey: "atemMix")
     }
 
     // MARK: 外部の音声

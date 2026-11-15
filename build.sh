@@ -34,8 +34,16 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/Resources" "$VENDOR/obj"
 bins=()
 for arch in ${ARCHS[@]}; do
+  # ATEM スイッチャーを USB でも操作するための SDK の窓口 (C++)
+  objs=()
+  for src in Sources/ATEMSDK/*.cpp; do
+    obj="$VENDOR/obj/$(basename $src .cpp)-$arch.o"
+    clang++ -std=c++17 -O2 -target $arch-apple-macos$MIN_OS -c "$src" -o "$obj"
+    objs+="$obj"
+  done
   swiftc -O -swift-version 5 \
     -F "$FW_BUILD" -framework Syphon \
+    -import-objc-header Sources/ATEMSDK/ATEMBridge.h ${objs[@]} -lc++ \
     -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
     -target $arch-apple-macos$MIN_OS \
     Sources/*.swift -o "$VENDOR/obj/NoGreenBack-$arch"
@@ -63,6 +71,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSHighResolutionCapable</key><true/>
   <key>NSCameraUsageDescription</key><string>人物を切り抜いて Syphon で送出するためにカメラを使用します。</string>
   <key>NSMicrophoneUsageDescription</key><string>画面録画にマイクの音声を入れたり、字幕を付けたりするために使用します。</string>
+  <key>NSLocalNetworkUsageDescription</key><string>ATEM スイッチャーの入力を切り替えるために、同じネットワークの機器と通信します。</string>
   <key>NSSpeechRecognitionUsageDescription</key><string>話した言葉を字幕にするために使用します。認識は Mac の中で行います。</string>
 </dict></plist>
 PLIST

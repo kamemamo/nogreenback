@@ -22,11 +22,48 @@ final class BackgroundSource: NSObject, AVCaptureVideoDataOutputSampleBufferDele
     /// 最新の背景フレーム (背景なしなら nil)
     var latestImage: CIImage? { lock.lock(); defer { lock.unlock() }; return _image }
 
+    /// 最後にフレームが届いた時刻と、取り込みを開始した時刻 (映像が止まったのを見つけるため)
+    private var lastFrameTime: CFAbsoluteTime = 0
+    private var startedTime: CFAbsoluteTime = 0
+    private var watchdog: Timer?
+    private var runtimeObserver: NSObjectProtocol?
+
     /// 背景にする映像を切り替える (nil なら背景なし = 透明)
-    func start(_ device: AVCaptureDevice?) throws {
-        guard device?.uniqueID != self.device?.uniqueID || screenFeed != nil else { return }
+    /// - Parameter force: 同じ機器でも開き直す (つなぎ直したときなど)
+    func start(_ device: AVCaptureDevice?, force: Bool = false) throws {
+        guard force || device?.uniqueID != self.device?.uniqueID || screenFeed != nil else { return }
         stop()
         guard let device else { return }
+        try open(device)
+        // スイッチャー (ATEM など) は映像形式を変えたときや、つないだ直後に
+        // USB の機器として一度消えて出直すことがある。古いつながりのまま映像が止まるので、
+        // しばらくフレームが来なければ同じ機器を探して開き直す
+        let id = device.uniqueID
+        watchdog = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            self?.reopenIfStalled(id)
+        }
+    }
+
+    private func reopenIfStalled(_ id: String) {
+        guard session != nil, self.device?.uniqueID == id else { return }
+        lock.lock(); let last = max(lastFrameTime, startedTime); lock.unlock()
+        guard CFAbsoluteTimeGetCurrent() - last > 3 else { return }
+        // 今つながっている同じ機器 (つなぎ直すと別のオブジェクトになる) で開き直す
+        guard let fresh = AVCaptureDevice(uniqueID: id), fresh.isConnected else { return }
+        NSLog("background: no frames from \(fresh.localizedName), reopening")
+        try? reopen(fresh)
+    }
+
+    /// 監視を続けたまま、セッションだけ作り直す
+    private func reopen(_ device: AVCaptureDevice) throws {
+        if let session { queue.async { session.stopRunning() } }
+        if let runtimeObserver { NotificationCenter.default.removeObserver(runtimeObserver) }
+        runtimeObserver = nil
+        session = nil
+        try open(device)
+    }
+
+    private func open(_ device: AVCaptureDevice) throws {
         let input = try AVCaptureDeviceInput(device: device)
         let session = AVCaptureSession()
         session.beginConfiguration()
@@ -41,10 +78,21 @@ final class BackgroundSource: NSObject, AVCaptureVideoDataOutputSampleBufferDele
         session.commitConfiguration()
         self.session = session
         self.device = device
+        lock.lock(); startedTime = CFAbsoluteTimeGetCurrent(); lock.unlock()
+        // 取り込み中のエラー (機器が外れた、ほかのアプリに取られたなど) は、少し待ってから開き直す
+        runtimeObserver = NotificationCenter.default.addObserver(
+            forName: AVCaptureSession.runtimeErrorNotification, object: session, queue: .main) { [weak self] note in
+            NSLog("background: session error \(String(describing: note.userInfo?[AVCaptureSessionErrorKey]))")
+            self?.lock.lock(); self?.startedTime = 0; self?.lastFrameTime = 0; self?.lock.unlock()
+        }
         queue.async { session.startRunning() }
     }
 
     func stop() {
+        watchdog?.invalidate()
+        watchdog = nil
+        if let runtimeObserver { NotificationCenter.default.removeObserver(runtimeObserver) }
+        runtimeObserver = nil
         if let session { queue.async { session.stopRunning() } }
         session = nil
         device = nil
@@ -87,7 +135,7 @@ final class BackgroundSource: NSObject, AVCaptureVideoDataOutputSampleBufferDele
     func captureOutput(_ output: AVCaptureOutput, didOutput sb: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard let pb = CMSampleBufferGetImageBuffer(sb) else { return }
         let image = CIImage(cvPixelBuffer: pb)
-        lock.lock(); _image = image; lock.unlock()
+        lock.lock(); _image = image; lastFrameTime = CFAbsoluteTimeGetCurrent(); lock.unlock()
     }
 }
 
