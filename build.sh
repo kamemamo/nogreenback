@@ -10,7 +10,7 @@ cd "$(dirname "$0")"
 VENDOR=vendor
 FW_BUILD="$PWD/$VENDOR/build"
 APP=NoGreenBack.app
-VERSION=2.0
+VERSION=2.0.1
 MIN_OS=12.0
 ARCHS=(arm64)
 
