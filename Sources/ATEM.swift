@@ -1,4 +1,4 @@
-// ATEM スイッチャー (Blackmagic Design) の入力を切り替える (試作)
+// ATEM スイッチャー (Blackmagic Design) の入力を切り替える
 // ・ATEM のソフト (Blackmagic ATEM Switchers) が入っていれば、その SDK で USB でも LAN でもつなぐ
 // ・入っていなければ、ATEM Software Control と同じネットワークの通信 (UDP 9910) を自前で行う (LAN のみ)
 

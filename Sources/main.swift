@@ -1039,7 +1039,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     let micMeter = MicMeter()
     var micCheckTick = 0
     let micLevel = NSLevelIndicator()
-    // ATEM スイッチャーの操作 (試作)
+    // ATEM スイッチャーの操作
     let atem = ATEMControl()
     let atemHostField = NSTextField()
     let atemConnectButton = NSButton()
@@ -1459,8 +1459,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         updateRecordSizeLabel()
         helpButton = NSButton(title: "", target: self, action: #selector(showShortcuts(_:)))
         helpButton.bezelStyle = .helpButton
-        helpButton.toolTip = "ショートカットの一覧 (⌘/)"
+        helpButton.toolTip = "ショートカットと使い方 (⌘/)"
 
+        termsButton = NSButton(image: NSImage(systemSymbolName: "character.book.closed",
+                                              accessibilityDescription: "字幕の置き換え")!,
+                               target: self, action: #selector(showTerms(_:)))
+        termsButton.bezelStyle = .rounded
+        termsButton.toolTip = "字幕の置き換え (よく間違える言葉の直し方) を編集・保存・読み込みします"
         subtitleButton = toolbarToggle("字幕", #selector(subtitleToggled(_:)))
         subtitleButton.toolTip = "話した言葉を文字にして、映像の下に出します。認識は Mac の中で行います"
         subtitles.terms = subtitleTermList
@@ -1482,7 +1487,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
 
         // 上部: 本番中に触るボタンだけを並べる (オンのときは色が付く)
         let toolbar = NSStackView(views: [
-            personButton, outputCheck, overlayCheck, subtitleButton, toolbarSeparator(),
+            personButton, outputCheck, overlayCheck, subtitleButton, termsButton, toolbarSeparator(),
             annotationCheck, penButton, clearButton, atemToolbarGroup, NSView(),
             recordButton, recordLabel, fpsLabel, helpButton,
         ])
@@ -1542,10 +1547,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         duckPopup.target = self
         duckPopup.action = #selector(extDuckChanged(_:))
         duckPopup.toolTip = "マイクで話している間、録画に入る外部の音を自動で下げます (スピーカーに出す音は下げません)"
-        let extHint = NSTextField(wrappingLabelWithString: "取り込んだ音をスピーカーに出し、録画ではマイクと混ぜて 1 本の音声にします。話している間は録画の外部の音を自動で下げます。「音量」はスピーカーと録画の両方に効きます")
-        extHint.font = .systemFont(ofSize: 11)
-        extHint.textColor = .secondaryLabelColor
-        extHint.preferredMaxLayoutWidth = sideControlWidth + 100
         refreshExtInputs()
         refreshExtOutputs()
         startExternal()
@@ -1555,31 +1556,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
             ("境界ぼかし", feather), ("明るさ安定化", deflicker),
         ])
         tuning.isHidden = !tuningOpen
-        // 字幕の置き換え: よく間違える言葉を「間違い → 正しい」と 1 行ずつ書く
-        termsView.string = subtitleTerms
-        termsView.font = .systemFont(ofSize: 13)
-        termsView.isRichText = false
-        termsView.isAutomaticQuoteSubstitutionEnabled = false
-        termsView.isAutomaticTextReplacementEnabled = false
-        termsView.isAutomaticSpellingCorrectionEnabled = false
-        termsView.textContainerInset = NSSize(width: 4, height: 4)
-        termsView.delegate = self
-        termsView.isVerticallyResizable = true
-        termsView.autoresizingMask = [.width]
-        let termsBox = NSScrollView()
-        termsBox.documentView = termsView
-        termsBox.hasVerticalScroller = true
-        termsBox.autohidesScrollers = true
-        termsBox.borderType = .bezelBorder
-        termsBox.widthAnchor.constraint(equalToConstant: sideControlWidth + 104).isActive = true
-        termsBox.heightAnchor.constraint(equalToConstant: 84).isActive = true
-        let termsHint = NSTextField(wrappingLabelWithString: "よく間違える言葉を「間違い → 正しい」と 1 行ずつ書くと、字幕と字幕ファイルで置き換えます (例: ジオメトリー濃度 → ジオメトリーノード、ブレンダー → Blender)。→ は -> や = でも書けます")
-        termsHint.font = .systemFont(ofSize: 11)
-        termsHint.textColor = .secondaryLabelColor
-        termsHint.preferredMaxLayoutWidth = sideControlWidth + 100
-        termsCountLabel.font = .systemFont(ofSize: 11, weight: .medium)
-        updateTermsCount()
-
         let cameraGrid = sideGrid([("カメラ", cameraPopup), ("品質", quality), ("フレームレート", fpsPopup)])
         let sections: [NSView] = [
             sectionHeader("カメラ"),
@@ -1592,19 +1568,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
             sideGrid([("背景映像", bgPopup), ("出す画面", outputScreenPopup), ("映像の比率", aspectPopup)]),
             sectionHeader("手書き"),
             sideGrid([("描くキー", keyPopup), ("色", penRow), ("太さ", widthSlider)]),
-            sectionHeader("字幕の置き換え"),
-            termsBox,
-            termsCountLabel,
-            termsHint,
             sectionHeader("録画"),
             sideGrid([("録画する画面", recordScreenPopup), ("マイク", micRow), ("映像", rateRow),
-                      ("長辺", sizeRow), ("形式", codecPopup)]),
-            recordSizeLabel,
+                      ("長辺", sizeRow), ("形式", codecPopup), ("", recordSizeLabel)]),
             sectionHeader("外部の音声"),
             sideGrid([("入力", extInRow), ("スピーカー", extOutPopup), ("音量", extVolSlider),
                       ("声で下げる", duckPopup)]),
-            extHint,
-            sectionHeader("ATEM スイッチャー（試作）"),
+            sectionHeader("ATEM スイッチャー"),
         ] + atemSection
         let side = NSStackView(views: sections)
         side.orientation = .vertical
@@ -2222,6 +2192,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
                   [cell("Esc", bold: true), cell("全画面出力を閉じる（全画面出力を操作中のとき）")],
                   [cell("⌘ Q", bold: true), cell("終了")]] { grid.addRow(with: r) }
         addMerged(note, space: 12)
+        func explain(_ text: String) -> NSTextField {
+            let t = NSTextField(wrappingLabelWithString: text)
+            t.font = .systemFont(ofSize: 13)
+            t.preferredMaxLayoutWidth = 400
+            return t
+        }
+        addMerged(header("外部の音声"), space: 16)
+        addMerged(explain("取り込んだ音をスピーカーに出し、録画ではマイクと混ぜて 1 本の音声にします。話している間は録画の外部の音を自動で下げます。「音量」はスピーカーと録画の両方に効きます。"), space: 0)
+        addMerged(header("ATEM スイッチャー"), space: 16)
+        addMerged(explain(ATEMControl.sdkAvailable
+            ? "USB でつないでいるなら「アドレス」を空欄のまま、LAN なら ATEM の IP アドレスを入れて「つなぐ」を押します。つながると、上部に入力のボタンが出ます。押した入力が本番に出ます。"
+            : "ATEM を LAN ケーブルで同じネットワークにつなぎ、IP アドレスを入れて「つなぐ」を押します (USB で操作するには ATEM のソフトを入れてください)。つながると、上部に入力のボタンが出ます。押した入力が本番に出ます。"), space: 0)
         grid.rowSpacing = 6
         grid.columnSpacing = 20
         grid.translatesAutoresizingMaskIntoConstraints = false
@@ -2333,14 +2315,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
             self.atemProgram = src
             self.showATEMProgram()
         }
-        let hint = NSTextField(wrappingLabelWithString: ATEMControl.sdkAvailable
-            ? "USB でつないでいるなら「アドレス」を空欄のまま、LAN なら ATEM の IP アドレスを入れて「つなぐ」を押します。つながると、上部に入力のボタンが出ます。押した入力が本番に出ます"
-            : "ATEM を LAN ケーブルで同じネットワークにつなぎ、IP アドレスを入れて「つなぐ」を押します (USB で操作するには ATEM のソフトを入れてください)。つながると、上部に入力のボタンが出ます。押した入力が本番に出ます")
-        hint.font = .systemFont(ofSize: 11)
-        hint.textColor = .secondaryLabelColor
-        hint.preferredMaxLayoutWidth = sideControlWidth + 100
         if atemAutoConnect { setATEMConnected(true) }
-        return [sideGrid([("アドレス", hostRow), ("", atemStatus)]), hint]
+        return [sideGrid([("アドレス", hostRow), ("", atemStatus)])]
     }
 
     func setATEMInputs(_ list: [ATEMControl.Input]) {
@@ -2691,6 +2667,111 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
             self.subtitles.terms = self.subtitleTermList
             self.cachedReplacements = self.subtitleReplacements
             self.updateTermsCount()
+        }
+    }
+
+    // MARK: 字幕の置き換え (上部のボタンから開く)
+
+    var termsButton = NSButton()
+    var termsPopover: NSPopover?
+
+    @objc func showTerms(_ sender: Any?) {
+        if let p = termsPopover, p.isShown { p.close(); return }
+        let p = termsPopover ?? makeTermsPopover()
+        termsPopover = p
+        termsView.string = subtitleTerms
+        updateTermsCount()
+        window.makeKeyAndOrderFront(nil)
+        p.show(relativeTo: termsButton.bounds, of: termsButton, preferredEdge: .maxY)
+        window.makeFirstResponder(nil)
+        p.contentViewController?.view.window?.makeFirstResponder(termsView)
+    }
+
+    func makeTermsPopover() -> NSPopover {
+        let title = NSTextField(labelWithString: "字幕の置き換え")
+        title.font = .boldSystemFont(ofSize: 13)
+        // よく間違える言葉を「間違い → 正しい」と 1 行ずつ書く
+        termsView.font = .systemFont(ofSize: 13)
+        termsView.isRichText = false
+        termsView.isAutomaticQuoteSubstitutionEnabled = false
+        termsView.isAutomaticTextReplacementEnabled = false
+        termsView.isAutomaticSpellingCorrectionEnabled = false
+        termsView.textContainerInset = NSSize(width: 4, height: 4)
+        termsView.delegate = self
+        termsView.isVerticallyResizable = true
+        termsView.autoresizingMask = [.width]
+        let termsBox = NSScrollView()
+        termsBox.documentView = termsView
+        termsBox.hasVerticalScroller = true
+        termsBox.autohidesScrollers = true
+        termsBox.borderType = .bezelBorder
+        termsBox.widthAnchor.constraint(equalToConstant: 420).isActive = true
+        termsBox.heightAnchor.constraint(equalToConstant: 240).isActive = true
+        let hint = NSTextField(wrappingLabelWithString: "よく間違える言葉を「間違い → 正しい」と 1 行ずつ書くと、字幕と字幕ファイルで置き換えます (例: ジオメトリー濃度 → ジオメトリーノード、ブレンダー → Blender)。→ は -> や = でも書けます。書いた内容は自動で残ります。ほかの Mac や別の話題用に、ファイルに保存・読み込みもできます")
+        hint.font = .systemFont(ofSize: 11)
+        hint.textColor = .secondaryLabelColor
+        hint.preferredMaxLayoutWidth = 420
+        termsCountLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        let load = NSButton(title: "読み込む…", target: self, action: #selector(loadTerms))
+        let save = NSButton(title: "保存…", target: self, action: #selector(saveTerms))
+        let buttons = NSStackView(views: [termsCountLabel, NSView(), load, save])
+        buttons.spacing = 8
+        let stack = NSStackView(views: [title, termsBox, buttons, hint])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        stack.edgeInsets = NSEdgeInsets(top: 14, left: 16, bottom: 14, right: 16)
+        buttons.widthAnchor.constraint(equalTo: termsBox.widthAnchor).isActive = true
+        let vc = NSViewController()
+        vc.view = stack
+        vc.preferredContentSize = stack.fittingSize
+        let p = NSPopover()
+        // ファイルの選択画面を開いても閉じないように、外を押したときだけ閉じる
+        p.behavior = .transient
+        p.contentViewController = vc
+        return p
+    }
+
+    /// 欄の内容をすぐ保存して、認識と置き換えに使う
+    func applyTerms(_ text: String) {
+        termsSaveTimer?.invalidate()
+        subtitleTerms = text
+        subtitles.terms = subtitleTermList
+        cachedReplacements = subtitleReplacements
+        updateTermsCount()
+    }
+
+    @objc func saveTerms() {
+        applyTerms(termsView.string)
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.plainText]
+        panel.nameFieldStringValue = "字幕の置き換え.txt"
+        panel.message = "字幕の置き換えをファイルに保存します"
+        termsPopover?.behavior = .applicationDefined
+        defer { termsPopover?.behavior = .transient }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try termsView.string.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            showAlert("保存できません: \(error.localizedDescription)")
+        }
+    }
+
+    @objc func loadTerms() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.plainText, .text]
+        panel.allowsMultipleSelection = false
+        panel.message = "字幕の置き換えのファイルを選びます (今の内容と入れ替わります)"
+        termsPopover?.behavior = .applicationDefined
+        defer { termsPopover?.behavior = .transient }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            var enc = String.Encoding.utf8
+            let text = try String(contentsOf: url, usedEncoding: &enc)
+            termsView.string = text
+            applyTerms(text)
+        } catch {
+            showAlert("読み込めません: \(error.localizedDescription)")
         }
     }
 
