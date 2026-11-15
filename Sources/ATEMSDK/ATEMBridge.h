@@ -34,6 +34,8 @@ int64_t atem_sdk_program(ATEMSDK *s);
 int atem_sdk_set_program(ATEMSDK *s, int64_t input);
 int atem_sdk_set_preview(ATEMSDK *s, int64_t input);
 int atem_sdk_auto(ATEMSDK *s);
+/// ミックスの長さを秒で決める (映像のフレームレートからフレーム数に直す)
+int atem_sdk_set_mix_seconds(ATEMSDK *s, double seconds);
 
 #ifdef __cplusplus
 }

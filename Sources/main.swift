@@ -2295,7 +2295,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         atemMixCheck.state = UserDefaults.standard.bool(forKey: "atemMix") ? .on : .off
         atemMixCheck.target = self
         atemMixCheck.action = #selector(atemMixChanged(_:))
-        atemMixCheck.toolTip = "オンにすると、ATEM で設定している切り替え効果 (ミックスなど) で移ります。オフならすぐ切り替えます (カット)"
+        atemMixCheck.toolTip = "オンにすると、ATEM で設定している切り替え効果 (ミックスなど) で移ります。ミックスは 0.5 秒。オフならすぐ切り替えます (カット)"
 
         atem.onState = { [weak self] state, detail in
             guard let self else { return }

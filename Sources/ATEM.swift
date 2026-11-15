@@ -29,6 +29,7 @@ final class ATEMControl: @unchecked Sendable {
     private var lastRemoteID: UInt16 = 0
     private var established = false
     private var initDone = false
+    private var framesPerSecond: Double = 30
     private var lastReceived = Date.distantPast
     private var helloSent = Date.distantPast
     private var pending: [UInt16: (packet: Data, sent: Date, tries: Int)] = [:]
@@ -187,12 +188,21 @@ final class ATEMControl: @unchecked Sendable {
             let long = cString(d[2..<22]), short = cString(d[22..<26])
             inputs[id] = long.isEmpty ? (short.isEmpty ? "\(id)" : short) : long
             if initDone { publishInputs() }
+        case "VidM" where d.count >= 1:
+            framesPerSecond = Self.framesPerSecond(videoMode: Int(d[0]))
         case "InCm":   // 最初の状態をひととおり受け取った
             initDone = true
             publishInputs()
         default:
             break
         }
+    }
+
+    /// VidM の番号ごとの、ミックスの長さの 1 秒あたりのフレーム数 (50p / 60p でも 25 / 30 で数える)
+    private static func framesPerSecond(videoMode m: Int) -> Double {
+        let table: [Double] = [30, 25, 30, 25, 25, 30, 25, 30, 24, 24, 25, 30, 25, 30,
+                               24, 24, 25, 30, 25, 30, 24, 24, 25, 30, 25, 30, 30, 30, 30, 30]
+        return m < table.count ? table[m] : 30
     }
 
     private func publishInputs() {
@@ -266,10 +276,25 @@ final class ATEMControl: @unchecked Sendable {
         if Self.sdkAvailable { queue.async { if let s = self.sdk { _ = atem_sdk_set_preview(s, Int64(source)) } }; return }
         send("CPvI", [0, 0] + be16(source))
     }
+    /// ミックスの長さ (秒)
+    static let mixSeconds = 0.5
+
     /// 次に出す入力へ、ミックスなどの切り替え効果で移る
     func auto() {
-        if Self.sdkAvailable { queue.async { if let s = self.sdk { _ = atem_sdk_auto(s) } }; return }
-        send("DAut", [0, 0, 0, 0])
+        if Self.sdkAvailable {
+            queue.async {
+                guard let s = self.sdk else { return }
+                _ = atem_sdk_set_mix_seconds(s, Self.mixSeconds)
+                _ = atem_sdk_auto(s)
+            }
+            return
+        }
+        // ミックスの長さはフレーム数で送る (映像の形式は VidM で受け取っている)
+        queue.async {
+            let frames = max(1, min(250, Int((Self.mixSeconds * self.framesPerSecond).rounded())))
+            self.send("CTMx", [0, UInt8(frames), 0, 0])
+            self.send("DAut", [0, 0, 0, 0])
+        }
     }
 
     private func send(_ name: String, _ body: [UInt8]) {

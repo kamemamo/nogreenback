@@ -41,6 +41,30 @@ private:
 
 struct Input { int64_t id; std::string name; };
 
+/// ミックスの長さの 1 秒あたりのフレーム数。ATEM は 50p / 60p でも 25 / 30 で数える
+double framesPerSecond(BMDSwitcherVideoMode m) {
+    switch (m) {
+    case bmdSwitcherVideoMode625i50PAL: case bmdSwitcherVideoMode625i50Anamorphic:
+    case bmdSwitcherVideoMode1080i50: case bmdSwitcherVideoMode1080p25:
+    case bmdSwitcherVideoMode4KHDp25: case bmdSwitcherVideoMode8KHDp25:
+        return 25;
+    case bmdSwitcherVideoMode720p50: case bmdSwitcherVideoMode1080p50:
+    case bmdSwitcherVideoMode4KHDp50: case bmdSwitcherVideoMode8KHDp50:
+        return 25;
+    case bmdSwitcherVideoMode720p5994: case bmdSwitcherVideoMode720p60:
+    case bmdSwitcherVideoMode1080p5994: case bmdSwitcherVideoMode1080p60:
+    case bmdSwitcherVideoMode4KHDp5994: case bmdSwitcherVideoMode4KHDp60:
+    case bmdSwitcherVideoMode8KHDp5994: case bmdSwitcherVideoMode8KHDp60:
+        return 30;
+    case bmdSwitcherVideoMode1080p2398: case bmdSwitcherVideoMode1080p24:
+    case bmdSwitcherVideoMode4KHDp2398: case bmdSwitcherVideoMode4KHDp24:
+    case bmdSwitcherVideoMode8KHDp2398: case bmdSwitcherVideoMode8KHDp24:
+        return 24;
+    default:
+        return 30;
+    }
+}
+
 } // namespace
 
 struct ATEMSDK {
@@ -140,5 +164,19 @@ int64_t atem_sdk_program(ATEMSDK *s) {
 int atem_sdk_set_program(ATEMSDK *s, int64_t input) { return s && s->me && s->me->SetProgramInput(input) == S_OK; }
 int atem_sdk_set_preview(ATEMSDK *s, int64_t input) { return s && s->me && s->me->SetPreviewInput(input) == S_OK; }
 int atem_sdk_auto(ATEMSDK *s) { return s && s->me && s->me->PerformAutoTransition() == S_OK; }
+
+int atem_sdk_set_mix_seconds(ATEMSDK *s, double seconds) {
+    if (!s || !s->me) return 0;
+    BMDSwitcherVideoMode mode;
+    double fps = s->switcher->GetVideoMode(&mode) == S_OK ? framesPerSecond(mode) : 30;
+    uint32_t frames = (uint32_t)(seconds * fps + 0.5);
+    if (frames < 1) frames = 1;
+    IBMDSwitcherTransitionMixParameters *mix = nullptr;
+    if (s->me->QueryInterface(IID_IBMDSwitcherTransitionMixParameters, (LPVOID *)&mix) != S_OK || !mix) return 0;
+    uint32_t current = 0;
+    bool ok = (mix->GetRate(&current) == S_OK && current == frames) || mix->SetRate(frames) == S_OK;
+    mix->Release();
+    return ok;
+}
 
 } // extern "C"
