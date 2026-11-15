@@ -824,7 +824,7 @@ final class RecordingPanel: NSPanel {
 /// 上から下へ並べるための、座標が上から始まるビュー (サイドバーのスクロール用)
 final class FlippedView: NSView { override var isFlipped: Bool { true } }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NSWindowDelegate {
     let settings = Settings()
     var processor: Processor!
     let session = AVCaptureSession()
@@ -1133,6 +1133,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
 
     /// 録画中に終了するときは、ファイルを閉じてから終了する (閉じないと再生できないファイルになる)
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // 終わる前に、画面を覆う透明なウィンドウ (手書きなど) を先に消す。
+        // 録画の保存などで終了に時間がかかる間も、ほかのアプリをクリックできるように
+        hideFloatingWindows()
         guard #available(macOS 12.3, *), let rec = recorder as? ScreenRecorder else { return .terminateNow }
         Task { @MainActor in
             _ = await rec.stop()
@@ -1143,8 +1146,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        hideFloatingWindows()
+        // カメラなどの停止が止まったままになっても、プロセスを残さない
+        DispatchQueue.global().asyncAfter(deadline: .now() + 3) { exit(0) }
+        externalAudio.stop()
+        micMeter.stop()
         session.stopRunning()
         processor.syphon.stop()
+    }
+
+    /// 操作ウィンドウを閉じたら、ほかのウィンドウが残っていても必ず終了する
+    /// (手書きなどの画面を覆うウィンドウだけが残って、クリックを受け取り続けないように)
+    func windowWillClose(_ notification: Notification) {
+        guard (notification.object as? NSWindow) === window else { return }
+        hideFloatingWindows()
+        DispatchQueue.main.async { NSApp.terminate(nil) }
+    }
+
+    /// 画面を覆う透明なウィンドウ (手書き・人物・全画面出力・字幕) を消し、描画モードを切る
+    func hideFloatingWindows() {
+        annotationTimer?.invalidate()
+        annotationTimer = nil
+        penLatched = false
+        annotation?.setDrawing(false)
+        annotation?.orderOut()
+        overlay?.orderOut(nil)
+        outputWindow?.orderOut(nil)
+        subtitleWindow.orderOut(nil)
     }
 
     // MARK: UI
@@ -1154,6 +1182,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
                           styleMask: [.titled, .closable, .resizable, .miniaturizable],
                           backing: .buffered, defer: false)
         window.title = "NoGreenBack"
+        window.delegate = self
+        window.isReleasedWhenClosed = false
         window.subtitle = "Syphon: NoGreenBack"
         window.contentMinSize = NSSize(width: 900, height: 560)
         // メニューバーのある画面 (主ディスプレイ) の中央に出す。
