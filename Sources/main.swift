@@ -1034,6 +1034,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
     let micMeter = MicMeter()
     var micCheckTick = 0
     let micLevel = NSLevelIndicator()
+    // 外部の音声: 取り込む機器、出すスピーカー、音量
+    let externalAudio = ExternalAudio()
+    let extInPopup = NSPopUpButton()
+    let extOutPopup = NSPopUpButton()
+    let extLevel = NSLevelIndicator()
+    var extOutputs: [AudioOutputs.Device] = []
+    var extInputID: String? {
+        get { UserDefaults.standard.string(forKey: "externalInputID") }
+        set { UserDefaults.standard.set(newValue, forKey: "externalInputID") }
+    }
+    /// nil = スピーカーに出さない、"" = システムの出力、それ以外は出力先の UID
+    var extOutputUID: String? {
+        get { UserDefaults.standard.string(forKey: "externalOutputUID") }
+        set { UserDefaults.standard.set(newValue, forKey: "externalOutputUID") }
+    }
+    /// 声で外部の音を下げるときの倍率 (1 なら下げない)
+    static let duckChoices: [(String, Float)] = [("下げない", 1), ("少し (-6dB)", 0.5), ("半分くらい (-12dB)", 0.25), ("大きく (-20dB)", 0.1)]
+    var extDuck: Float {
+        get { UserDefaults.standard.object(forKey: "externalDuck") as? Float ?? 0.25 }
+        set { UserDefaults.standard.set(newValue, forKey: "externalDuck") }
+    }
+    var extVolume: Float {
+        get { UserDefaults.standard.object(forKey: "externalVolume") as? Float ?? 1 }
+        set { UserDefaults.standard.set(newValue, forKey: "externalVolume") }
+    }
     var micLevelTimer: Timer?
     var micDevices: [AVCaptureDevice] = []
 
@@ -1234,6 +1259,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
             // 減るときはゆっくり落とす (針がちらつかないように)
             let v = max(0, min(30, (db + 60) / 2))
             self.micLevel.doubleValue = v >= self.micLevel.doubleValue ? v : max(v, self.micLevel.doubleValue - 1.5)
+            let ev = max(0, min(30, (Double(self.externalAudio.level) + 60) / 2))
+            self.extLevel.doubleValue = ev >= self.extLevel.doubleValue ? ev : max(ev, self.extLevel.doubleValue - 1.5)
             // 約 2 秒ごとに、システムの入力が切り替わっていないか見る
             self.micCheckTick += 1
             if self.micCheckTick % 30 == 0 { self.followSystemMic() }
@@ -1252,11 +1279,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification,
                                                object: nil, queue: .main) { [weak self] _ in
             self?.startMeter()
+            self?.refreshExtOutputs()
         }
         for name in [AVCaptureDevice.wasConnectedNotification, AVCaptureDevice.wasDisconnectedNotification] {
             NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 self?.refreshMics()
                 self?.refreshBackgrounds()
+                self?.refreshExtInputs()
+                self?.refreshExtOutputs()
             }
         }
         recordLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
@@ -1412,6 +1442,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         let micRow = NSStackView(views: [micPopup, micLevel])
         micRow.spacing = 6
         micPopup.widthAnchor.constraint(equalToConstant: sideControlWidth - 76).isActive = true
+        // 外部の音声
+        for l in [extLevel] {
+            l.levelIndicatorStyle = .continuousCapacity
+            l.minValue = 0; l.maxValue = 30; l.warningValue = 24; l.criticalValue = 28
+            l.widthAnchor.constraint(equalToConstant: 70).isActive = true
+        }
+        extLevel.toolTip = "外部の音声の入力レベル"
+        extInPopup.target = self
+        extInPopup.action = #selector(extInputChanged(_:))
+        extInPopup.toolTip = "キャプチャーボードやオーディオインターフェースなど、取り込む音声の機器。録画のときはマイクの音と混ぜて入ります"
+        extOutPopup.target = self
+        extOutPopup.action = #selector(extOutputChanged(_:))
+        extOutPopup.toolTip = "取り込んだ音を、そのまま出すスピーカー"
+        let extInRow = NSStackView(views: [extInPopup, extLevel])
+        extInRow.spacing = 6
+        extInPopup.widthAnchor.constraint(equalToConstant: sideControlWidth - 76).isActive = true
+        let extVolSlider = NSSlider(value: Double(extVolume), minValue: 0, maxValue: 1,
+                                    target: self, action: #selector(extVolumeChanged(_:)))
+        extVolSlider.toolTip = "外部の音の音量。スピーカーに出す音と、録画に入る音の両方が変わります"
+        let duckPopup = NSPopUpButton()
+        duckPopup.addItems(withTitles: Self.duckChoices.map(\.0))
+        duckPopup.selectItem(at: Self.duckChoices.firstIndex { abs($0.1 - extDuck) < 0.001 } ?? 2)
+        duckPopup.target = self
+        duckPopup.action = #selector(extDuckChanged(_:))
+        duckPopup.toolTip = "マイクで話している間、録画に入る外部の音を自動で下げます (スピーカーに出す音は下げません)"
+        let extHint = NSTextField(wrappingLabelWithString: "取り込んだ音をスピーカーに出し、録画ではマイクと混ぜて 1 本の音声にします。話している間は録画の外部の音を自動で下げます。「音量」はスピーカーと録画の両方に効きます")
+        extHint.font = .systemFont(ofSize: 11)
+        extHint.textColor = .secondaryLabelColor
+        extHint.preferredMaxLayoutWidth = sideControlWidth + 100
+        refreshExtInputs()
+        refreshExtOutputs()
+        startExternal()
         let tuning = sideGrid([
             ("ちらつき抑制", smoothing), ("消失の保持", hold), ("境界の締まり", tighten),
             ("境界ぼかし", feather), ("明るさ安定化", deflicker),
@@ -1462,6 +1524,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
             sideGrid([("録画する画面", recordScreenPopup), ("マイク", micRow), ("映像", rateRow),
                       ("長辺", sizeRow), ("形式", codecPopup)]),
             recordSizeLabel,
+            sectionHeader("外部の音声"),
+            sideGrid([("入力", extInRow), ("スピーカー", extOutPopup), ("音量", extVolSlider),
+                      ("声で下げる", duckPopup)]),
+            extHint,
         ]
         let side = NSStackView(views: sections)
         side.orientation = .vertical
@@ -2108,6 +2174,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         startMeter()
     }
 
+    // MARK: 外部の音声
+
+    func refreshExtInputs() {
+        extInPopup.removeAllItems()
+        extInPopup.addItem(withTitle: "使わない")
+        extInPopup.addItems(withTitles: micDevices.map(\.localizedName))
+        if let id = extInputID, let i = micDevices.firstIndex(where: { $0.uniqueID == id }) {
+            extInPopup.selectItem(at: i + 1)
+        } else {
+            extInPopup.selectItem(at: 0)
+        }
+        // 選んでいた機器が抜けた・つながったときは開き直す
+        if selectedExternal?.uniqueID != externalAudio.device?.uniqueID { startExternal() }
+    }
+
+    func refreshExtOutputs() {
+        let list = AudioOutputs.list()
+        if list.map(\.uid) == extOutputs.map(\.uid), extOutPopup.numberOfItems > 0 { return }
+        extOutputs = list
+        extOutPopup.removeAllItems()
+        extOutPopup.addItem(withTitle: "出さない")
+        extOutPopup.addItem(withTitle: "システムの出力")
+        extOutPopup.addItems(withTitles: list.map(\.name))
+        switch extOutputUID {
+        case nil: extOutPopup.selectItem(at: 0)
+        case "": extOutPopup.selectItem(at: 1)
+        case let uid?:
+            if let i = list.firstIndex(where: { $0.uid == uid }) { extOutPopup.selectItem(at: i + 2) }
+            else { extOutPopup.selectItem(at: 0) }
+        }
+    }
+
+    var selectedExternal: AVCaptureDevice? {
+        let i = extInPopup.indexOfSelectedItem
+        return i >= 1 && i - 1 < micDevices.count ? micDevices[i - 1] : nil
+    }
+
+    /// スピーカーの出力先 (出さないなら nil、システムの出力なら "")
+    var selectedExtOutput: String? {
+        let i = extOutPopup.indexOfSelectedItem
+        if i == 1 { return "" }
+        return i >= 2 && i - 2 < extOutputs.count ? extOutputs[i - 2].uid : nil
+    }
+
+    func startExternal() {
+        externalAudio.start(selectedExternal, outputUID: selectedExtOutput, volume: extVolume)
+    }
+
+    @objc func extInputChanged(_ sender: NSPopUpButton) {
+        extInputID = selectedExternal?.uniqueID
+        startExternal()
+    }
+
+    @objc func extOutputChanged(_ sender: NSPopUpButton) {
+        extOutputUID = selectedExtOutput
+        externalAudio.setMonitor(outputUID: selectedExtOutput, volume: extVolume)
+    }
+
+    @objc func extVolumeChanged(_ sender: NSSlider) {
+        extVolume = sender.floatValue
+        externalAudio.setMonitor(outputUID: selectedExtOutput, volume: extVolume)
+        if #available(macOS 12.3, *), let rec = recorder as? ScreenRecorder { rec.externalGain = extVolume }
+    }
+
+    @objc func extDuckChanged(_ sender: NSPopUpButton) {
+        extDuck = Self.duckChoices[sender.indexOfSelectedItem].1
+        if #available(macOS 12.3, *), let rec = recorder as? ScreenRecorder { rec.duckLevel = extDuck }
+    }
+
     /// メーター用にマイクを開く (録画中は録画側の音を使うので開かない)
     func startMeter() {
         if recorder != nil || !NSApp.isActive { return }
@@ -2139,6 +2274,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         let i = micPopup.indexOfSelectedItem
         if i == 1 { return AVCaptureDevice.default(for: .audio) }
         return i >= 2 && i - 2 < micDevices.count ? micDevices[i - 2] : nil
+    }
+
+    /// 録画に混ぜる外部の音声 (マイクと同じ機器なら二重になるので混ぜない)
+    var recordExternal: ExternalAudio? {
+        guard let d = externalAudio.device, d.uniqueID != selectedMic?.uniqueID else { return nil }
+        return externalAudio
     }
 
     @objc func recordToggled() {
@@ -2203,7 +2344,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate {
                     _ = try await rec.start(screen: self.recordScreen,
                                             keeping: self.recordedWindowNumbers,
                                             microphone: self.selectedMic,
+                                            external: self.recordExternal,
                                             settings: self.recordSettings)
+                    rec.duckLevel = self.extDuck
+                    rec.externalGain = self.extVolume
                     self.recorder = rec
                     // 録画中はメーター用にマイクを開かない (Bluetooth マイクは 2 か所から開くと途切れる)
                     self.micMeter.stop()

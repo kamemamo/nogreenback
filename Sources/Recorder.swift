@@ -69,9 +69,10 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
     ///   - keeping: 録画に映す NoGreenBack のウィンドウ (重ねた人物・手書き・全画面出力) の番号。
     ///     NoGreenBack のそれ以外のウィンドウ (操作ウィンドウや停止ボタン) は映さない
     ///   - microphone: 音声を録るマイク (nil なら音声なし)
+    ///   - external: 外部の音声。マイクがあればマイクと混ぜ、なければこれだけを録る
     ///   - settings: 画質などの設定
     func start(screen: NSScreen, keeping windowNumbers: [Int], microphone: AVCaptureDevice?,
-               settings: RecordSettings) async throws -> URL {
+               external: ExternalAudio? = nil, settings: RecordSettings) async throws -> URL {
         // 画面収録の許可がない場合、ここで macOS が許可を求める (または失敗する)
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         let displayID = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
@@ -121,7 +122,7 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
         writer.add(video)
 
         var audioSession: AVCaptureSession?
-        if let mic = microphone {
+        if microphone != nil || external != nil {
             guard await AVCaptureDevice.requestAccess(for: .audio) else {
                 throw RecorderError.message("マイクへのアクセスが許可されていません。\nシステム設定 > プライバシーとセキュリティ > マイク で許可してください。")
             }
@@ -136,7 +137,10 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
                 writer.add(audio)
                 audioInput = audio
                 recordsAudio = true
-
+            }
+        }
+        if let mic = microphone {
+            do {
                 let session = AVCaptureSession()
                 let input = try AVCaptureDeviceInput(device: mic)
                 if session.canAddInput(input) { session.addInput(input) }
@@ -173,6 +177,17 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
         // 画面とマイクはどちらもホスト時刻で時刻が付くので、同じ時間軸に並べられる
         audioSession?.startRunning()
         self.audioSession = audioSession
+        // 外部の音声: マイクがあれば混ぜるためにためておき、なければそのまま録る
+        if let external {
+            let mixing = microphone != nil
+            mixesExternal = mixing
+            fifoLock.withLock { fifo.removeAll() }
+            external.tap = { [weak self] sb in
+                guard let self else { return }
+                if mixing { self.pushExternal(sb) } else { self.queue.async { self.appendAudio(sb, mixing: false, scale: true) } }
+            }
+            self.external = external
+        }
         return url
     }
 
@@ -183,6 +198,8 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
         stream = nil
         audioSession?.stopRunning()
         audioSession = nil
+        external?.tap = nil
+        external = nil
         let writer: AVAssetWriter? = queue.sync {
             videoInput?.markAsFinished()
             audioInput?.markAsFinished()
@@ -294,10 +311,77 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
     private var audioAnchor: CMTime?
     private var audioFrames: Int64 = 0
 
+    /// 外部の音声 (録画中だけ)
+    private var external: ExternalAudio?
+    /// true ならマイクの音に外部の音を足して書く
+    private var mixesExternal = false
+    /// マイクの音に足すまで、外部の音をためておく所
+    private let fifoLock = NSLock()
+    private var fifo: [Float] = []
+
+    /// 録画に入れる外部の音の大きさ (スピーカー音量と連動)
+    var externalGain: Float = 1
+    /// 声で外部の音を下げる: 話している間の外部の音の倍率 (1 なら下げない)
+    var duckLevel: Float = 1
+    /// 今の外部の音の倍率 (下げている間は duckLevel に近づく)
+    private(set) var duckGain: Float = 1
+    /// 話し終わってから、まだ下げたままにする残りサンプル数
+    private var duckHold = 0
+
     func captureOutput(_ output: AVCaptureOutput, didOutput sb: CMSampleBuffer, from connection: AVCaptureConnection) {
         let db = connection.audioChannels.map(\.averagePowerLevel).max() ?? -160
         levelLock.lock(); _level = db; levelLock.unlock()
+        appendAudio(sb, mixing: mixesExternal)
+    }
 
+    /// 外部の音をためる。たまりすぎたら (時計のずれなど) 古いほうを捨てて遅れないようにする
+    private func pushExternal(_ sb: CMSampleBuffer) {
+        guard let samples = Self.floats(sb) else { return }
+        fifoLock.lock()
+        fifo += samples
+        if fifo.count > 9_600 { fifo.removeFirst(fifo.count - 2_400) }   // 0.2 秒を超えたら 0.05 秒まで
+        fifoLock.unlock()
+    }
+
+    /// 48kHz・モノラル・Float32 の音をサンプルの配列にする
+    private static func floats(_ sb: CMSampleBuffer) -> [Float]? {
+        guard let asbd = sb.formatDescription?.audioStreamBasicDescription,
+              asbd.mChannelsPerFrame == 1, asbd.mBitsPerChannel == 32,
+              asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0,
+              let block = CMSampleBufferGetDataBuffer(sb) else { return nil }
+        let frames = CMSampleBufferGetNumSamples(sb)
+        let bytes = frames * 4
+        guard frames > 0, CMBlockBufferGetDataLength(block) >= bytes else { return nil }
+        var samples = [Float](repeating: 0, count: frames)
+        let ok = samples.withUnsafeMutableBytes {
+            CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: bytes, destination: $0.baseAddress!) == noErr
+        }
+        return ok ? samples : nil
+    }
+
+    /// サンプルの配列から音のバッファを作る
+    private static func buffer(_ samples: [Float], format: CMFormatDescription, pts: CMTime) -> CMSampleBuffer? {
+        let bytes = samples.count * 4
+        var block: CMBlockBuffer?
+        guard CMBlockBufferCreateWithMemoryBlock(allocator: nil, memoryBlock: nil, blockLength: bytes,
+                                                 blockAllocator: nil, customBlockSource: nil, offsetToData: 0,
+                                                 dataLength: bytes, flags: kCMBlockBufferAssureMemoryNowFlag,
+                                                 blockBufferOut: &block) == noErr, let block else { return nil }
+        let ok = samples.withUnsafeBytes {
+            CMBlockBufferReplaceDataBytes(with: $0.baseAddress!, blockBuffer: block,
+                                          offsetIntoDestination: 0, dataLength: bytes) == noErr
+        }
+        guard ok else { return nil }
+        var out: CMSampleBuffer?
+        CMAudioSampleBufferCreateReadyWithPacketDescriptions(allocator: nil, dataBuffer: block, formatDescription: format,
+                                                             sampleCount: samples.count, presentationTimeStamp: pts,
+                                                             packetDescriptions: nil, sampleBufferOut: &out)
+        return out
+    }
+
+    /// 音を時刻を付け直して書き込む (mixing なら、ためた外部の音を足してから)
+    /// - scale: 外部の音だけを録るとき、externalGain を掛けてから書く
+    private func appendAudio(_ sb: CMSampleBuffer, mixing: Bool, scale: Bool = false) {
         // 映像が始まる前の音は捨てる (始点を映像にそろえる)
         guard started, let audioInput else { return }
         let frames = Int64(CMSampleBufferGetNumSamples(sb))
@@ -315,12 +399,44 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
         } else {
             audioAnchor = CMTimeSubtract(pts, offset)
         }
-        var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: rate),
-                                        presentationTimeStamp: CMTimeAdd(audioAnchor!, offset),
-                                        decodeTimeStamp: .invalid)
+        let newPTS = CMTimeAdd(audioAnchor!, offset)
         var retimed: CMSampleBuffer?
-        CMSampleBufferCreateCopyWithNewTiming(allocator: nil, sampleBuffer: sb, sampleTimingEntryCount: 1,
-                                              sampleTimingArray: &timing, sampleBufferOut: &retimed)
+        if mixing, var samples = Self.floats(sb), let format = sb.formatDescription {
+            // マイクの声の大きさで、外部の音を下げるか決める
+            // (すぐ下げ・0.6 秒待ってからゆっくり戻すので、言葉の切れ目で上がったり下がったりしない)
+            let target = duckLevel
+            if target < 1 {
+                let rms = sqrt(samples.reduce(0) { $0 + $1 * $1 } / Float(samples.count))
+                if 20 * log10(max(rms, 1e-9)) > VoiceDuck.threshold { duckHold = 28_800 }
+                else { duckHold = max(0, duckHold - samples.count) }
+            } else {
+                duckHold = 0
+            }
+            let goal: Float = duckHold > 0 ? target : 1
+            let down = (1 - target) / 2_400 + 1e-6     // 0.05 秒で下げる
+            let up = (1 - target) / 24_000 + 1e-6      // 0.5 秒で戻す
+            var gain = duckGain
+            fifoLock.lock()
+            let n = min(samples.count, fifo.count)
+            for i in 0..<samples.count {
+                gain = gain > goal ? max(goal, gain - down) : min(goal, gain + up)
+                if i < n { samples[i] = max(-1, min(1, samples[i] + fifo[i] * gain * externalGain)) }
+            }
+            duckGain = gain
+            fifo.removeFirst(n)
+            fifoLock.unlock()
+            retimed = Self.buffer(samples, format: format, pts: newPTS)
+        }
+        if retimed == nil, scale, externalGain != 1, var samples = Self.floats(sb), let format = sb.formatDescription {
+            for i in 0..<samples.count { samples[i] = max(-1, min(1, samples[i] * externalGain)) }
+            retimed = Self.buffer(samples, format: format, pts: newPTS)
+        }
+        if retimed == nil {
+            var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: rate),
+                                            presentationTimeStamp: newPTS, decodeTimeStamp: .invalid)
+            CMSampleBufferCreateCopyWithNewTiming(allocator: nil, sampleBuffer: sb, sampleTimingEntryCount: 1,
+                                                  sampleTimingArray: &timing, sampleBufferOut: &retimed)
+        }
         audioFrames += frames
         guard let retimed, audioInput.isReadyForMoreMediaData else { return }
         if audioInput.append(retimed) { audioSamplesWritten += 1 }
