@@ -128,6 +128,22 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
         get { previewLock.lock(); defer { previewLock.unlock() }; return _annotationImage }
         set { previewLock.lock(); _annotationImage = newValue; previewLock.unlock() }
     }
+    /// 映像に重ねるキーボード (nil なら出さない)。大きさは映像の横幅に対する割合
+    private var _keyboard: (scale: Double, position: KeyboardRenderer.Position)?
+    private var keyboardCache: (key: String, image: CIImage?)?
+    var keyboard: (scale: Double, position: KeyboardRenderer.Position)? {
+        get { previewLock.lock(); defer { previewLock.unlock() }; return _keyboard }
+        set { previewLock.lock(); _keyboard = newValue; previewLock.unlock() }
+    }
+    /// キーボードの画像 (映像の大きさと設定が同じあいだは作り直さない)
+    private func keyboardImage(extent: CGRect) -> CIImage? {
+        guard let k = keyboard else { return nil }
+        let key = "\(Int(extent.width))x\(Int(extent.height)) \(k.scale) \(k.position.rawValue)"
+        if keyboardCache?.key != key {
+            keyboardCache = (key, KeyboardRenderer.ciImage(extent: extent, scale: k.scale, position: k.position))
+        }
+        return keyboardCache?.image
+    }
     func addView(_ v: MTKView) {
         v.isPaused = true
         v.enableSetNeedsDisplay = false
@@ -356,6 +372,12 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
             // プレビューと全画面出力では、背景ありのときと同じ位置・大きさにする
             // (透明な下地を敷いて、映像の大きさを元のままにする)
             display = person.composited(over: CIImage(color: .clear).cropped(to: canvas)).cropped(to: canvas)
+        }
+
+        // キーの説明用のキーボードを重ねる (手書きの線より下。背景があるときは Syphon にも)
+        if let kb = keyboardImage(extent: canvas) {
+            display = kb.composited(over: display).cropped(to: canvas)
+            if background.latestImage != nil { source = display }
         }
 
         // 全画面出力の上に描いた手書きを重ねる (背景があるときは Syphon にも)
@@ -864,6 +886,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         set { UserDefaults.standard.set(newValue, forKey: "personOn") }
     }
     var personButton = NSButton()
+    // キーの説明用のキーボード
+    var keyboardButton = NSButton()
+    lazy var keyboardWindow = KeyboardWindow()
+    var keyboardOn: Bool {
+        get { UserDefaults.standard.bool(forKey: "keyboardOn") }
+        set { UserDefaults.standard.set(newValue, forKey: "keyboardOn") }
+    }
+    var keyboardPosition: KeyboardRenderer.Position {
+        get { .init(rawValue: UserDefaults.standard.integer(forKey: "keyboardPosition")) ?? .bottom }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "keyboardPosition") }
+    }
+    /// キーボード (テンキー込み) の横幅の、映像の横幅に対する割合
+    var keyboardScale: Double {
+        get { UserDefaults.standard.object(forKey: "keyboardSize") as? Double ?? 0.58 }
+        set { UserDefaults.standard.set(newValue, forKey: "keyboardSize") }
+    }
     // 字幕
     var subtitleButton = NSButton()
     let subtitles = SubtitleEngine()
@@ -940,6 +978,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         var n = (annotation?.windows.filter { $0 !== covered }.map(\.windowNumber) ?? [])
         if let overlay { n.append(overlay.windowNumber) }
         if let outputWindow { n.append(outputWindow.windowNumber) }
+        // キーボードも録画に映す (説明に使うため)
+        if keyboardWindow.isVisible { n.append(keyboardWindow.windowNumber) }
         // デスクトップの字幕は録画に焼き込まない (字幕は .srt ファイルとして別に残す)
         return n
     }
@@ -1208,6 +1248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         overlay?.orderOut(nil)
         outputWindow?.orderOut(nil)
         subtitleWindow.orderOut(nil)
+        keyboardWindow.orderOut(nil)
     }
 
     // MARK: UI
@@ -1410,6 +1451,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         clearButton.toolTip = "手書きを全部消します。\(HotKeys.modifierSymbols)C でも消せます"
         setAnnotationVisible(annotationOn)
 
+        // キーの説明用のキーボード
+        keyboardButton = toolbarToggle("キーボード", #selector(keyboardToggled(_:)))
+        keyboardButton.state = keyboardOn ? .on : .off
+        keyboardButton.toolTip = "キーボード (JIS 配列・テンキー付き。Mac と Windows のキーの名前入り) の絵を出します。手書きで「このキー」と示すときに使います。\(HotKeys.modifierSymbols)B"
+        let keyboardPositionPopup = NSPopUpButton()
+        keyboardPositionPopup.addItems(withTitles: KeyboardRenderer.Position.allCases.map(\.title))
+        keyboardPositionPopup.selectItem(at: keyboardPosition.rawValue)
+        keyboardPositionPopup.target = self
+        keyboardPositionPopup.action = #selector(keyboardPositionChanged(_:))
+        let keyboardSizeSlider = NSSlider(value: keyboardScale, minValue: 0.35, maxValue: 0.95,
+                                          target: self, action: #selector(keyboardSizeChanged(_:)))
+        keyboardSizeSlider.isContinuous = false
+
         // 5 段目: 背景映像と全画面出力
         bgPopup.target = self
         bgPopup.action = #selector(backgroundChanged(_:))
@@ -1488,7 +1542,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         // 上部: 本番中に触るボタンだけを並べる (オンのときは色が付く)
         let toolbar = NSStackView(views: [
             personButton, outputCheck, overlayCheck, subtitleButton, termsButton, toolbarSeparator(),
-            annotationCheck, penButton, clearButton, atemToolbarGroup, NSView(),
+            annotationCheck, penButton, clearButton, keyboardButton, atemToolbarGroup, NSView(),
             recordButton, recordLabel, fpsLabel, helpButton,
         ])
         toolbar.orientation = .horizontal
@@ -1568,6 +1622,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
             sideGrid([("背景映像", bgPopup), ("出す画面", outputScreenPopup), ("映像の比率", aspectPopup)]),
             sectionHeader("手書き"),
             sideGrid([("描くキー", keyPopup), ("色", penRow), ("太さ", widthSlider)]),
+            sectionHeader("キーボード"),
+            sideGrid([("位置", keyboardPositionPopup), ("大きさ", keyboardSizeSlider)]),
             sectionHeader("録画"),
             sideGrid([("録画する画面", recordScreenPopup), ("マイク", micRow), ("映像", rateRow),
                       ("長辺", sizeRow), ("形式", codecPopup), ("", recordSizeLabel)]),
@@ -2109,6 +2165,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         let covered = outputWindow != nil && outputScreen == overlayScreen
         overlay?.setVisible(overlayOn && personOn && !covered)
         settings.showPerson = personOn
+        updateKeyboard()
+    }
+
+    // MARK: キーの説明用のキーボード
+
+    /// 映像 (プレビュー・全画面出力・Syphon) と、全画面出力に隠れていなければ画面にも出す
+    func updateKeyboard() {
+        processor.keyboard = keyboardOn ? (keyboardScale, keyboardPosition) : nil
+        let covered = outputWindow != nil && outputScreen == overlayScreen
+        if keyboardOn && !covered {
+            keyboardWindow.show(on: overlayScreen, scale: keyboardScale, position: keyboardPosition)
+        } else {
+            keyboardWindow.orderOut(nil)
+        }
+        updateRecordedWindows()
+    }
+    @objc func keyboardToggled(_ sender: NSButton) {
+        keyboardOn = sender.state == .on
+        updateKeyboard()
+    }
+    func toggleKeyboard() {
+        keyboardButton.state = keyboardOn ? .off : .on
+        keyboardToggled(keyboardButton)
+    }
+    @objc func keyboardPositionChanged(_ sender: NSPopUpButton) {
+        keyboardPosition = .init(rawValue: sender.indexOfSelectedItem) ?? .bottom
+        updateKeyboard()
+    }
+    @objc func keyboardSizeChanged(_ sender: NSSlider) {
+        keyboardScale = sender.doubleValue
+        updateKeyboard()
     }
 
     func placeOverlay() {
@@ -2130,6 +2217,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
             ("K", kVK_ANSI_K, "ペンの色を次の色へ", { [weak self] in self?.nextPenColor() }),
             ("F", kVK_ANSI_F, "全画面出力の表示・非表示", { [weak self] in self?.toggleOutput() }),
             ("S", kVK_ANSI_S, "字幕のオン・オフ", { [weak self] in self?.toggleSubtitles() }),
+            ("B", kVK_ANSI_B, "キーボードの表示・非表示", { [weak self] in self?.toggleKeyboard() }),
         ]
     }
 
