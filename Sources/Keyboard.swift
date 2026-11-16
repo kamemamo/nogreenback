@@ -198,23 +198,39 @@ enum KeyboardRenderer {
     }
 
     /// 領域 area の中で、キーボードを置く枠 (左下原点)
-    static func frame(size: CGSize, in area: CGRect, position: Position) -> CGRect {
+    /// 「人物の反対側」では、人物 (person は左右の範囲) と画面の端のすき間の真ん中に置く
+    static func frame(size: CGSize, in area: CGRect, position: Position,
+                      person: ClosedRange<CGFloat>? = nil) -> CGRect {
         let margin = area.height * 0.03
-        let x: CGFloat
+        var x: CGFloat
         switch position {
         case .bottomLeft: x = area.minX + margin
         case .bottomRight: x = area.maxX - size.width - margin
-        case .bottom, .top, .auto: x = area.midX - size.width / 2
+        case .bottom, .top: x = area.midX - size.width / 2
+        case .auto:
+            if let box = person {
+                // 人物の体は枠の真ん中寄りにあるので、枠を左右 20% ずつ狭めて体の端とみなす
+                let inset = (box.upperBound - box.lowerBound) * 0.2
+                let p = (box.lowerBound + inset)...(box.upperBound - inset)
+                // 広い方のすき間の真ん中。入りきらなければ画面の端に寄せる
+                let left = p.lowerBound - area.minX, right = area.maxX - p.upperBound
+                let center = left >= right ? area.minX + left / 2 : p.upperBound + right / 2
+                x = center - size.width / 2
+                x = min(max(x, area.minX + margin), area.maxX - size.width - margin)
+            } else {
+                x = area.midX - size.width / 2
+            }
         }
         let y = position == .top ? area.maxY - size.height - margin : area.minY + margin
         return CGRect(origin: CGPoint(x: x.rounded(), y: y.rounded()), size: size)
     }
 
     /// 映像 (extent) に重ねるキーボード。scale は映像の横幅に対する割合
-    static func ciImage(extent: CGRect, scale: Double, position: Position) -> CIImage? {
+    static func ciImage(extent: CGRect, scale: Double, position: Position,
+                        person: ClosedRange<CGFloat>? = nil) -> CIImage? {
         guard let cg = image(width: extent.width * CGFloat(scale)) else { return nil }
         let img = CIImage(cgImage: cg)
-        let f = frame(size: img.extent.size, in: extent, position: position)
+        let f = frame(size: img.extent.size, in: extent, position: position, person: person)
         return img.transformed(by: CGAffineTransform(translationX: f.minX, y: f.minY))
     }
 }
@@ -245,7 +261,9 @@ final class KeyboardWindow: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
-    func show(on screen: NSScreen?, scale: Double, position: KeyboardRenderer.Position) {
+    /// person は人物の左右の範囲 (画面の幅に対する割合)
+    func show(on screen: NSScreen?, scale: Double, position: KeyboardRenderer.Position,
+              person: ClosedRange<CGFloat>? = nil) {
         guard let screen else { orderOut(nil); return }
         let sf = screen.frame
         let bs = screen.backingScaleFactor
@@ -256,7 +274,8 @@ final class KeyboardWindow: NSPanel {
                                                                height: CGFloat(cg.height) / bs))
         }
         guard let size = imageView.image?.size else { orderOut(nil); return }
-        setFrame(KeyboardRenderer.frame(size: size, in: sf, position: position), display: true)
+        let p = person.map { (sf.minX + $0.lowerBound * sf.width)...(sf.minX + $0.upperBound * sf.width) }
+        setFrame(KeyboardRenderer.frame(size: size, in: sf, position: position, person: p), display: true)
         orderFrontRegardless()
     }
 }

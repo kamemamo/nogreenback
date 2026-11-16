@@ -136,11 +136,13 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
         set { previewLock.lock(); _keyboard = newValue; previewLock.unlock() }
     }
     /// キーボードの画像 (映像の大きさと設定が同じあいだは作り直さない)
-    private func keyboardImage(extent: CGRect) -> CIImage? {
+    /// person は人物の左右の範囲 (「人物の反対側」のとき、すき間の真ん中に置くため)
+    private func keyboardImage(extent: CGRect, person: ClosedRange<CGFloat>) -> CIImage? {
         guard let k = keyboard else { return nil }
-        let key = "\(Int(extent.width))x\(Int(extent.height)) \(k.scale) \(k.position.rawValue)"
+        let key = "\(Int(extent.width))x\(Int(extent.height)) \(k.scale) \(k.position.rawValue) \(Int(person.lowerBound))-\(Int(person.upperBound))"
         if keyboardCache?.key != key {
-            keyboardCache = (key, KeyboardRenderer.ciImage(extent: extent, scale: k.scale, position: k.position))
+            keyboardCache = (key, KeyboardRenderer.ciImage(extent: extent, scale: k.scale, position: k.position,
+                                                           person: person))
         }
         return keyboardCache?.image
     }
@@ -375,7 +377,7 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
         }
 
         // キーの説明用のキーボードを重ねる (手書きの線より下。背景があるときは Syphon にも)
-        if let kb = keyboardImage(extent: canvas) {
+        if let kb = keyboardImage(extent: canvas, person: px...(px + pw)) {
             display = kb.composited(over: display).cropped(to: canvas)
             if background.latestImage != nil { source = display }
         }
@@ -896,11 +898,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     var keyboardPosition: KeyboardRenderer.Position {
         get { (UserDefaults.standard.object(forKey: "keyboardPlace") as? Int).flatMap { .init(rawValue: $0) } ?? .auto }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "keyboardPlace") }
-    }
-    /// 実際に置く場所 (「人物の反対側」なら、人物が右なら左下、左なら右下)
-    var keyboardPlacement: KeyboardRenderer.Position {
-        guard keyboardPosition == .auto else { return keyboardPosition }
-        return (overlayCorner == .bottomRight || overlayCorner == .topRight) ? .bottomLeft : .bottomRight
     }
     /// キーボード (テンキー込み) の横幅の、映像の横幅に対する割合
     var keyboardScale: Double {
@@ -2177,10 +2174,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
 
     /// 映像 (プレビュー・全画面出力・Syphon) と、全画面出力に隠れていなければ画面にも出す
     func updateKeyboard() {
-        processor.keyboard = keyboardOn ? (keyboardScale, keyboardPlacement) : nil
+        processor.keyboard = keyboardOn ? (keyboardScale, keyboardPosition) : nil
         let covered = outputWindow != nil && outputScreen == overlayScreen
         if keyboardOn && !covered {
-            keyboardWindow.show(on: overlayScreen, scale: keyboardScale, position: keyboardPlacement)
+            // 画面に重ねる人物は、画面の幅に対して overlayScale の幅で隅に置いている
+            let right = overlayCorner == .bottomRight || overlayCorner == .topRight
+            let s = CGFloat(overlayScale)
+            keyboardWindow.show(on: overlayScreen, scale: keyboardScale, position: keyboardPosition,
+                                person: right ? (1 - s)...1 : 0...s)
         } else {
             keyboardWindow.orderOut(nil)
         }
