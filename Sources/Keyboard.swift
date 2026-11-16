@@ -16,7 +16,16 @@ enum KeyboardRenderer {
         var h: CGFloat = 1
         /// 文字や数字 1 つのキー (大きな文字で出す)
         var big = false
+        /// shift を押して出る文字 (キーの上の方に小さく出す)
+        var shift: String? = nil
     }
+
+    /// JIS 配列で shift を押して出る文字 (テンキー以外)
+    static let shifted: [String: String] = [
+        "1": "!", "2": "\"", "3": "#", "4": "$", "5": "%", "6": "&", "7": "'", "8": "(", "9": ")",
+        "-": "=", "^": "~", "¥": "|", "@": "`", "[": "{", ";": "+", ":": "*", "]": "}",
+        ",": "<", ".": ">", "/": "?",
+    ]
 
     /// ファンクションキーの行の高さ
     static let fnRow: CGFloat = 0.55
@@ -38,7 +47,9 @@ enum KeyboardRenderer {
             var x = x0
             for (mac, win, w) in items {
                 let big = win == nil && mac.count == 1
-                keys.append(Key(mac: mac, win: win, x: x, y: y, w: w, h: h, big: big))
+                // テンキーには shift の文字を付けない
+                let shift = x < mainWidth ? shifted[mac] : nil
+                keys.append(Key(mac: mac, win: win, x: x, y: y, w: w, h: h, big: big, shift: shift))
                 x += w
             }
         }
@@ -132,6 +143,12 @@ enum KeyboardRenderer {
             }
         }
         func drawLabel(_ key: Key, in r: NSRect) {
+            if key.big, let shift = key.shift {
+                // shift の文字を上に、ふだんの文字を下に
+                drawLines([text(shift, size: unit * 0.26, color: NSColor(white: 0.8, alpha: 1)),
+                           text(key.mac, size: unit * 0.34, weight: .semibold)], in: r)
+                return
+            }
             if key.big {
                 drawLines([text(key.mac, size: unit * 0.4, weight: .semibold)], in: r)
                 return
@@ -175,8 +192,9 @@ enum KeyboardRenderer {
 
     /// 置く場所
     enum Position: Int, CaseIterable {
-        case bottom, bottomLeft, bottomRight, top
-        var title: String { ["下の中央", "左下", "右下", "上の中央"][rawValue] }
+        /// 人物の反対側の下 (人物が右なら左下、左なら右下)
+        case auto, bottom, bottomLeft, bottomRight, top
+        var title: String { ["人物の反対側", "下の中央", "左下", "右下", "上の中央"][rawValue] }
     }
 
     /// 領域 area の中で、キーボードを置く枠 (左下原点)
@@ -186,7 +204,7 @@ enum KeyboardRenderer {
         switch position {
         case .bottomLeft: x = area.minX + margin
         case .bottomRight: x = area.maxX - size.width - margin
-        case .bottom, .top: x = area.midX - size.width / 2
+        case .bottom, .top, .auto: x = area.midX - size.width / 2
         }
         let y = position == .top ? area.maxY - size.height - margin : area.minY + margin
         return CGRect(origin: CGPoint(x: x.rounded(), y: y.rounded()), size: size)

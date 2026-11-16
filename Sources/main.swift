@@ -894,8 +894,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         set { UserDefaults.standard.set(newValue, forKey: "keyboardOn") }
     }
     var keyboardPosition: KeyboardRenderer.Position {
-        get { .init(rawValue: UserDefaults.standard.integer(forKey: "keyboardPosition")) ?? .bottom }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "keyboardPosition") }
+        get { (UserDefaults.standard.object(forKey: "keyboardPlace") as? Int).flatMap { .init(rawValue: $0) } ?? .auto }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "keyboardPlace") }
+    }
+    /// 実際に置く場所 (「人物の反対側」なら、人物が右なら左下、左なら右下)
+    var keyboardPlacement: KeyboardRenderer.Position {
+        guard keyboardPosition == .auto else { return keyboardPosition }
+        return (overlayCorner == .bottomRight || overlayCorner == .topRight) ? .bottomLeft : .bottomRight
     }
     /// キーボード (テンキー込み) の横幅の、映像の横幅に対する割合
     var keyboardScale: Double {
@@ -2172,10 +2177,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
 
     /// 映像 (プレビュー・全画面出力・Syphon) と、全画面出力に隠れていなければ画面にも出す
     func updateKeyboard() {
-        processor.keyboard = keyboardOn ? (keyboardScale, keyboardPosition) : nil
+        processor.keyboard = keyboardOn ? (keyboardScale, keyboardPlacement) : nil
         let covered = outputWindow != nil && outputScreen == overlayScreen
         if keyboardOn && !covered {
-            keyboardWindow.show(on: overlayScreen, scale: keyboardScale, position: keyboardPosition)
+            keyboardWindow.show(on: overlayScreen, scale: keyboardScale, position: keyboardPlacement)
         } else {
             keyboardWindow.orderOut(nil)
         }
@@ -2190,7 +2195,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         keyboardToggled(keyboardButton)
     }
     @objc func keyboardPositionChanged(_ sender: NSPopUpButton) {
-        keyboardPosition = .init(rawValue: sender.indexOfSelectedItem) ?? .bottom
+        keyboardPosition = .init(rawValue: sender.indexOfSelectedItem) ?? .auto
         updateKeyboard()
     }
     @objc func keyboardSizeChanged(_ sender: NSSlider) {
@@ -2203,6 +2208,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         settings.pipScale = overlayScale
         overlay?.place(on: overlayScreen, corner: overlayCorner, scale: overlayScale)
         annotation?.coverAllScreens()
+        // 人物の位置が変わったら、キーボードを反対側へ
+        if keyboardButton.state == .on { updateKeyboard() }
     }
 
     // MARK: 全体で効くショートカット (Stream Deck の「ホットキー」から使う)
