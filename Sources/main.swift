@@ -1467,7 +1467,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         termsButton.bezelStyle = .rounded
         termsButton.toolTip = "字幕の置き換え (よく間違える言葉の直し方) を編集・保存・読み込みします"
         subtitleButton = toolbarToggle("字幕", #selector(subtitleToggled(_:)))
-        subtitleButton.toolTip = "話した言葉を文字にして、映像の下に出します。認識は Mac の中で行います"
+        subtitleButton.toolTip = "話した言葉を文字にして、映像の下に出します。認識は Mac の中で行います。\(HotKeys.modifierSymbols)S"
         subtitles.terms = subtitleTermList
         cachedReplacements = subtitleReplacements
         subtitles.onText = { [weak self] text in
@@ -2129,6 +2129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
             ("D", kVK_ANSI_D, "ペン (描画モード) のオン・オフ", { [weak self] in self?.togglePen() }),
             ("K", kVK_ANSI_K, "ペンの色を次の色へ", { [weak self] in self?.nextPenColor() }),
             ("F", kVK_ANSI_F, "全画面出力の表示・非表示", { [weak self] in self?.toggleOutput() }),
+            ("S", kVK_ANSI_S, "字幕のオン・オフ", { [weak self] in self?.toggleSubtitles() }),
         ]
     }
 
@@ -2229,6 +2230,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     func togglePerson() {
         personButton.state = personOn ? .off : .on
         personToggled(personButton)
+    }
+
+    func toggleSubtitles() {
+        subtitleButton.state = subtitleButton.state == .on ? .off : .on
+        subtitleToggled(subtitleButton)
     }
 
     func togglePen() {
