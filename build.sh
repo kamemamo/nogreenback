@@ -80,19 +80,43 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict></plist>
 PLIST
 
-# アドホック署名 (Developer ID 証明書がないため。他の Mac では初回起動時に許可が必要)
-codesign --force --sign - "$APP/Contents/Frameworks/Syphon.framework"
-# アドホック署名の既定の条件は「ビルドの中身 (cdhash) が同じこと」なので、ビルドし直すたびに
-# macOS からは別のアプリに見え、画面収録などの許可が外れてしまう。
-# 条件を「バンドル ID が local.nogreenback であること」にして、ビルドし直しても許可を引き継ぐ
-codesign --force --sign - -r='designated => identifier "local.nogreenback"' "$APP"
+# 署名
+# Developer ID の証明書がキーチェーンにあれば、それで署名する (Hardened Runtime 付き。公証を受けられる)。
+# なければアドホック署名 (他の Mac では初回起動時に許可が必要)。
+# 使う証明書を決めたいときは SIGN_ID="Developer ID Application: …" ./build.sh
+SIGN_ID="${SIGN_ID:-$(security find-identity -v -p codesigning 2>/dev/null | grep -m1 '"Developer ID Application' | sed -E 's/.*"(.*)"/\1/' || true)}"
+if [[ -n "$SIGN_ID" ]]; then
+  echo "==> Developer ID で署名"
+  codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$APP/Contents/Frameworks/Syphon.framework"
+  codesign --force --options runtime --timestamp --entitlements NoGreenBack.entitlements --sign "$SIGN_ID" "$APP"
+else
+  codesign --force --sign - "$APP/Contents/Frameworks/Syphon.framework"
+  # アドホック署名の既定の条件は「ビルドの中身 (cdhash) が同じこと」なので、ビルドし直すたびに
+  # macOS からは別のアプリに見え、画面収録などの許可が外れてしまう。
+  # 条件を「バンドル ID が local.nogreenback であること」にして、ビルドし直しても許可を引き継ぐ
+  codesign --force --sign - -r='designated => identifier "local.nogreenback"' "$APP"
+fi
 codesign --verify --deep --strict "$APP"
 echo "==> 完成: $PWD/$APP  ($(lipo -archs "$APP/Contents/MacOS/NoGreenBack"))"
 
 # 3) 配布用 zip
+# Developer ID で署名していて、公証の設定 (xcrun notarytool store-credentials NoGreenBack) があれば、
+# Apple の公証を受けてから zip にする (ダウンロードした人の Mac で警告が出なくなる)
+NOTARY_PROFILE="${NOTARY_PROFILE:-NoGreenBack}"
 if [[ "${1:-}" == "--zip" ]]; then
   mkdir -p dist
   rm -f dist/NoGreenBack.zip
+  if [[ -n "$SIGN_ID" ]] && xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1; then
+    echo "==> Apple の公証を受けています (数分かかります)"
+    ditto -c -k --sequesterRsrc --keepParent "$APP" dist/notarize.zip
+    xcrun notarytool submit dist/notarize.zip --keychain-profile "$NOTARY_PROFILE" --wait
+    rm -f dist/notarize.zip
+    # 公証の結果をアプリに添付する (ネットにつながっていない Mac でも警告が出ないように)
+    xcrun stapler staple "$APP"
+    spctl -a -vv "$APP"
+  elif [[ -n "$SIGN_ID" ]]; then
+    echo "==> 公証の設定 ($NOTARY_PROFILE) がないので、公証は受けずに zip にします"
+  fi
   ditto -c -k --sequesterRsrc --keepParent "$APP" dist/NoGreenBack.zip
   echo "==> 配布用: $PWD/dist/NoGreenBack.zip"
 fi

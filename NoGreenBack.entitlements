@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Developer ID で署名するとき (Hardened Runtime) に使う許可 -->
+<plist version="1.0"><dict>
+  <!-- カメラ (人物の切り抜き) -->
+  <key>com.apple.security.device.camera</key><true/>
+  <!-- マイク (録画の音声・字幕・外部の音声) -->
+  <key>com.apple.security.device.audio-input</key><true/>
+  <!-- ATEM を USB で操作するため、Blackmagic の部品 (BMDSwitcherAPI.bundle) を読み込む -->
+  <key>com.apple.security.cs.disable-library-validation</key><true/>
+</dict></plist>
