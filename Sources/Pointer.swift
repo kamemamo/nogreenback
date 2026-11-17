@@ -126,12 +126,26 @@ final class PointerWindow: NSPanel {
 
     /// screen の上で、start (根元) から tip (先) まで棒を描く。座標は画面全体 (左下原点)
     func show(on screen: NSScreen, from start: CGPoint, to tip: CGPoint) {
-        if frame != screen.frame { setFrame(screen.frame, display: false) }
+        let moved = frame != screen.frame
+        if moved { setFrame(screen.frame, display: false) }
         let o = screen.frame.origin
+        // 描き直すのは、前の棒と新しい棒のまわりだけ (画面全体を 60 回/秒描き直さないように)
+        let old = stickBounds(view.start, view.tip)
         view.start = CGPoint(x: start.x - o.x, y: start.y - o.y)
         view.tip = CGPoint(x: tip.x - o.x, y: tip.y - o.y)
-        view.needsDisplay = true
+        if moved || !isVisible {
+            view.needsDisplay = true
+        } else {
+            view.setNeedsDisplay(old.union(stickBounds(view.start, view.tip)))
+        }
         if !isVisible { orderFrontRegardless() }
+    }
+
+    /// 棒と矢印と影が入る範囲 (ビューの座標)
+    private func stickBounds(_ a: CGPoint, _ b: CGPoint) -> NSRect {
+        let pad = view.bounds.height * 0.04
+        return NSRect(x: min(a.x, b.x) - pad, y: min(a.y, b.y) - pad,
+                      width: abs(a.x - b.x) + pad * 2, height: abs(a.y - b.y) + pad * 2)
     }
 }
 

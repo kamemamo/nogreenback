@@ -361,31 +361,52 @@ enum SubtitleRenderer {
                       bottom: CGFloat? = nil) -> CIImage? {
         let lines = lines(text)
         guard !lines.isEmpty else { return nil }
-        let fontSize = extent.height * 0.05
-        let font = NSFont.systemFont(ofSize: fontSize, weight: .bold)
+        let margin = extent.height * 0.03
+        // 文字の大きさは映像の高さの 5%。帯が映像の幅に入りきらないときは小さくする
+        var fontSize = extent.height * 0.05
+        var attributed = attributedText(lines, fontSize: fontSize)
+        var textSize = measure(attributed)
+        let maxWidth = extent.width - margin * 2
+        if textSize.width + fontSize * 0.8 > maxWidth, textSize.width > 0 {
+            fontSize *= maxWidth / (textSize.width + fontSize * 0.8)
+            attributed = attributedText(lines, fontSize: fontSize)
+            textSize = measure(attributed)
+        }
+        // 半透明の黒い帯に文字を描く (CIAttributedTextImageGenerator は 2 行だと幅を 2 行分つなげた長さにしてしまうので使わない)
+        let pad = (fontSize * 0.4).rounded()
+        let w = Int(ceil(textSize.width + pad * 2)), h = Int(ceil(textSize.height + pad * 2))
+        guard w > 0, h > 0,
+              let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0.55))
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
+        attributed.draw(with: NSRect(x: pad, y: pad, width: textSize.width, height: textSize.height),
+                        options: .usesLineFragmentOrigin)
+        NSGraphicsContext.restoreGraphicsState()
+        guard let cg = ctx.makeImage() else { return nil }
+        let (x, y) = position(size: CGSize(width: w, height: h), in: extent, person: person, bottom: bottom)
+        return CIImage(cgImage: cg).transformed(by: CGAffineTransform(translationX: x, y: y))
+    }
+
+    private static func attributedText(_ lines: [String], fontSize: CGFloat) -> NSAttributedString {
         let style = NSMutableParagraphStyle()
         style.alignment = .center
         style.lineSpacing = fontSize * 0.15
         let shadow = NSShadow()
         shadow.shadowColor = .black
         shadow.shadowBlurRadius = fontSize * 0.15
-        let attributed = NSAttributedString(string: lines.joined(separator: "\n"), attributes: [
-            .font: font, .foregroundColor: NSColor.white, .paragraphStyle: style, .shadow: shadow,
+        return NSAttributedString(string: lines.joined(separator: "\n"), attributes: [
+            .font: NSFont.systemFont(ofSize: fontSize, weight: .bold), .foregroundColor: NSColor.white,
+            .paragraphStyle: style, .shadow: shadow,
         ])
-        let gen = CIFilter(name: "CIAttributedTextImageGenerator")!
-        gen.setValue(attributed, forKey: "inputText")
-        gen.setValue(1.0, forKey: "inputScaleFactor")
-        guard let textImage = gen.outputImage else { return nil }
-        // 半透明の黒い帯を敷く
-        let pad = fontSize * 0.4
-        let box = CGRect(x: 0, y: 0, width: textImage.extent.width + pad * 2,
-                         height: textImage.extent.height + pad * 2)
-        let back = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0.55)).cropped(to: box)
-        let label = textImage.transformed(by: CGAffineTransform(translationX: pad - textImage.extent.minX,
-                                                                y: pad - textImage.extent.minY))
-            .composited(over: back)
-        let (x, y) = position(size: box.size, in: extent, person: person, bottom: bottom)
-        return label.transformed(by: CGAffineTransform(translationX: x, y: y))
+    }
+
+    private static func measure(_ text: NSAttributedString) -> CGSize {
+        let r = text.boundingRect(with: CGSize(width: 100_000, height: 100_000), options: .usesLineFragmentOrigin)
+        return CGSize(width: ceil(r.width), height: ceil(r.height))
     }
 }
 

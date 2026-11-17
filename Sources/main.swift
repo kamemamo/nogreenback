@@ -130,6 +130,8 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
         set { previewLock.lock(); _annotationImage = newValue; previewLock.unlock() }
     }
     private var _pointer: (tip: CGPoint, angle: CGFloat)?
+    /// 指し棒の画像 (先と傾きが同じあいだは作り直さない)
+    private var pointerCache: (key: String, image: CIImage?)?
     /// 指し棒の先 (合成した映像の座標) と傾き (度)。nil なら出さない
     var pointer: (tip: CGPoint, angle: CGFloat)? {
         get { previewLock.lock(); defer { previewLock.unlock() }; return _pointer }
@@ -266,17 +268,13 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
     /// 明るさ安定化: フレーム全体の平均輝度を求め、ゆっくり追従する移動平均に合わせてゲインをかける。
     /// 照明の明滅 (例: 50Hz 地域を 30fps で撮ると約 10Hz で脈打つ) を打ち消す。
     /// ゆっくりした明るさの変化 (自動露出や照明の点灯) にはそのまま追従する。
-    private func deflickered(_ image: CIImage) -> CIImage {
+    private func deflickered(_ image: CIImage, pixelBuffer: CVPixelBuffer) -> CIImage {
         let strength = settings.deflicker
         guard strength > 0.01 else { lumaAverage = nil; return image }
         let e = image.extent
-        let small = image.transformed(by: CGAffineTransform(scaleX: 0.125, y: 0.125))
-        let avg = small.applyingFilter("CIAreaAverage",
-                                       parameters: [kCIInputExtentKey: CIVector(cgRect: small.extent)])
-        var px = [Float](repeating: 0, count: 4)
-        ciContext.render(avg, toBitmap: &px, rowBytes: 16,
-                         bounds: CGRect(x: 0, y: 0, width: 1, height: 1), format: .RGBAf, colorSpace: nil)
-        let luma = Double(0.299 * px[0] + 0.587 * px[1] + 0.114 * px[2])
+        // 平均の明るさは、カメラの画素を CPU で間引いて読む (64×36 点)。
+        // GPU で求めて読み戻すと、毎フレーム GPU の処理が終わるのを待つことになるため
+        guard let luma = Self.averageLuma(pixelBuffer) else { return image }
         guard luma > 0.01 else { return image }
         let ref = (lumaAverage ?? luma) * 0.9 + luma * 0.1   // 約 10 フレームで追従
         lumaAverage = ref
@@ -288,6 +286,27 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
             "inputGVector": CIVector(x: 0, y: g, z: 0, w: 0),
             "inputBVector": CIVector(x: 0, y: 0, z: g, w: 0),
         ]).cropped(to: e)
+    }
+
+    /// BGRA の画素を間引いて読んだ平均の明るさ (0〜1)
+    private static func averageLuma(_ pb: CVPixelBuffer) -> Double? {
+        guard CVPixelBufferGetPixelFormatType(pb) == kCVPixelFormatType_32BGRA,
+              CVPixelBufferLockBaseAddress(pb, .readOnly) == kCVReturnSuccess else { return nil }
+        defer { CVPixelBufferUnlockBaseAddress(pb, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(pb)?.assumingMemoryBound(to: UInt8.self) else { return nil }
+        let w = CVPixelBufferGetWidth(pb), h = CVPixelBufferGetHeight(pb), row = CVPixelBufferGetBytesPerRow(pb)
+        let nx = 64, ny = 36
+        var sum = 0
+        for j in 0..<ny {
+            let line = base + (j * h / ny + h / ny / 2) * row
+            for i in 0..<nx {
+                let p = line + (i * w / nx + w / nx / 2) * 4
+                // BGRA。0.114B + 0.587G + 0.299R を整数で
+                sum += 29 * Int(p[0]) + 150 * Int(p[1]) + 77 * Int(p[2])
+            }
+        }
+        // 画素の値は sRGB (ガンマ付き)。補正は Core Image の作業空間 (リニア) でかけるので、リニアに直す
+        return pow(Double(sum) / Double(nx * ny * 256 * 255), 2.2)
     }
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
@@ -308,7 +327,7 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
         guard let maskBuffer = request.results?.first?.pixelBuffer else { return }
 
         // 2) マスクを映像サイズに拡大して合成
-        var source = deflickered(CIImage(cvPixelBuffer: pixelBuffer))
+        var source = deflickered(CIImage(cvPixelBuffer: pixelBuffer), pixelBuffer: pixelBuffer)
         let extent = source.extent
         guard let cb = queue.makeCommandBuffer() else { return }
         var mask = CIImage(cvPixelBuffer: maskBuffer, options: [.colorSpace: NSNull()])
@@ -400,8 +419,12 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
 
         // 指し棒 (全画面出力の上のマウスの位置を、人物のいる側から差し出した棒の矢印で指す)
         if let p = pointer {
-            let start = PointerRenderer.base(tip: p.tip, angle: p.angle, in: canvas)
-            if let stick = PointerRenderer.ciImage(extent: canvas, from: start, to: p.tip) {
+            let key = "\(Int(canvas.width))x\(Int(canvas.height)) \(Int(p.tip.x)),\(Int(p.tip.y)) \(Int(p.angle * 10))"
+            if pointerCache?.key != key {
+                let start = PointerRenderer.base(tip: p.tip, angle: p.angle, in: canvas)
+                pointerCache = (key, PointerRenderer.ciImage(extent: canvas, from: start, to: p.tip))
+            }
+            if let stick = pointerCache?.image {
                 display = stick.composited(over: display).cropped(to: canvas)
                 if background.latestImage != nil { source = display }
             }
@@ -654,12 +677,16 @@ final class AnnotationView: NSView {
     }
     func clear() { strokes.removeAll(); needsDisplay = true }
 
-    /// 時間がたった線を消す (タイマーから呼ぶ)
+    /// 時間がたった線を消す (タイマーから呼ぶ)。
+    /// 描き直すのは、線が消えかけている (最後の 0.5 秒) か、消えたときだけ
+    /// (線が残っている間ずっと画面全体を 60 回/秒描き直さないように)
     func tick() {
         guard fadeAfter > 0, !strokes.isEmpty else { return }
         let now = Date()
+        let before = strokes.count
         strokes.removeAll { s in s.finished.map { now.timeIntervalSince($0) > fadeAfter } ?? false }
-        needsDisplay = true
+        let fading = strokes.contains { s in s.finished.map { now.timeIntervalSince($0) > fadeAfter - 0.5 } ?? false }
+        if fading || strokes.count != before { needsDisplay = true }
     }
 
     override func draw(_ dirtyRect: NSRect) {
