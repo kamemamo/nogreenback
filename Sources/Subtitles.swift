@@ -321,8 +321,23 @@ enum SubtitleRenderer {
         return Array(result.suffix(maxLines))
     }
 
-    /// 映像の大きさ (extent) に合わせて、下の中央に置いた字幕の画像を作る
-    static func image(text: String, extent: CGRect) -> CIImage? {
+    /// 字幕を置く左下の位置。人物がいれば反対側のすき間の真ん中 (キーボードと同じ)、
+    /// 入りきらなければ画面の端に寄せる。高さは下から 6%、キーボードがあればその上
+    static func position(size: CGSize, in area: CGRect, person: ClosedRange<CGFloat>?,
+                         bottom: CGFloat?) -> (CGFloat, CGFloat) {
+        let margin = area.height * 0.03
+        let center = person.map { KeyboardRenderer.gapCenter(in: area, person: $0) } ?? area.midX
+        var x = center - size.width / 2
+        x = min(max(x, area.minX + margin), area.maxX - size.width - margin)
+        let y = max(area.minY + area.height * 0.06, (bottom ?? area.minY) + margin)
+        return (x.rounded(), y.rounded())
+    }
+
+    /// 映像の大きさ (extent) に合わせて、下に置いた字幕の画像を作る。
+    /// person (人物の枠の左右の範囲) があれば人物の反対側のすき間の真ん中、なければ中央。
+    /// bottom があれば、その高さより上に置く (キーボードと重ならないように)
+    static func image(text: String, extent: CGRect, person: ClosedRange<CGFloat>? = nil,
+                      bottom: CGFloat? = nil) -> CIImage? {
         let lines = lines(text)
         guard !lines.isEmpty else { return nil }
         let fontSize = extent.height * 0.05
@@ -348,9 +363,7 @@ enum SubtitleRenderer {
         let label = textImage.transformed(by: CGAffineTransform(translationX: pad - textImage.extent.minX,
                                                                 y: pad - textImage.extent.minY))
             .composited(over: back)
-        // 下の中央 (下から映像の高さの 6%)
-        let x = extent.midX - box.width / 2
-        let y = extent.minY + extent.height * 0.06
+        let (x, y) = position(size: box.size, in: extent, person: person, bottom: bottom)
         return label.transformed(by: CGAffineTransform(translationX: x, y: y))
     }
 }
@@ -370,8 +383,8 @@ final class SubtitleWindow: NSPanel {
         ignoresMouseEvents = true
         isReleasedWhenClosed = false
         hidesOnDeactivate = false
-        // 人物の表示と同じ、最上位の層
-        level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()))
+        // 人物の表示の 1 つ上 (同じ層だと、人物の表示が定期的に前に出るたびに前後を取り合ってちらつく)
+        level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()) + 1)
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         box.wantsLayer = true
         box.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
@@ -385,8 +398,9 @@ final class SubtitleWindow: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
-    /// 字幕を出す (空なら隠す)。映像に重ねる字幕と同じ見た目にする
-    func show(_ text: String, on screen: NSScreen) {
+    /// 字幕を出す (空なら隠す)。映像に重ねる字幕と同じ見た目・置き方にする。
+    /// person は人物の枠の左右の範囲 (画面の幅に対する割合)、bottom はキーボードの上端 (画面の座標)
+    func show(_ text: String, on screen: NSScreen, person: ClosedRange<CGFloat>? = nil, bottom: CGFloat? = nil) {
         let lines = SubtitleRenderer.lines(text)
         guard !lines.isEmpty else { orderOut(nil); return }
         let sf = screen.frame
@@ -407,7 +421,9 @@ final class SubtitleWindow: NSPanel {
                                                           height: .greatestFiniteMagnitude)) ?? .zero
         let pad = (fontSize * 0.4).rounded()
         let w = ceil(text.width) + pad * 2, h = ceil(text.height) + pad * 2
-        setFrame(NSRect(x: sf.midX - w / 2, y: sf.minY + sf.height * 0.06, width: w, height: h), display: true)
+        let p = person.map { (sf.minX + $0.lowerBound * sf.width)...(sf.minX + $0.upperBound * sf.width) }
+        let (x, y) = SubtitleRenderer.position(size: CGSize(width: w, height: h), in: sf, person: p, bottom: bottom)
+        setFrame(NSRect(x: x, y: y, width: w, height: h), display: true)
         label.frame = NSRect(x: pad, y: pad, width: w - pad * 2, height: h - pad * 2)
         box.layer?.cornerRadius = fontSize * 0.25
         orderFrontRegardless()

@@ -198,6 +198,16 @@ enum KeyboardRenderer {
     }
 
     /// 領域 area の中で、キーボードを置く枠 (左下原点)
+    /// 人物 (box は人物を置いた枠の左右の範囲) と画面の端の、広い方のすき間の真ん中の x。
+    /// 人物の体は枠の真ん中寄りにあるので、枠を左右 20% ずつ狭めて体の端とみなす
+    /// (字幕も同じ場所に出す)
+    static func gapCenter(in area: CGRect, person box: ClosedRange<CGFloat>) -> CGFloat {
+        let inset = (box.upperBound - box.lowerBound) * 0.2
+        let lo = box.lowerBound + inset, hi = box.upperBound - inset
+        let left = lo - area.minX, right = area.maxX - hi
+        return left >= right ? area.minX + left / 2 : hi + right / 2
+    }
+
     /// 「人物の反対側」では、人物 (person は左右の範囲) と画面の端のすき間の真ん中に置く
     static func frame(size: CGSize, in area: CGRect, position: Position,
                       person: ClosedRange<CGFloat>? = nil) -> CGRect {
@@ -209,13 +219,8 @@ enum KeyboardRenderer {
         case .bottom, .top: x = area.midX - size.width / 2
         case .auto:
             if let box = person {
-                // 人物の体は枠の真ん中寄りにあるので、枠を左右 20% ずつ狭めて体の端とみなす
-                let inset = (box.upperBound - box.lowerBound) * 0.2
-                let p = (box.lowerBound + inset)...(box.upperBound - inset)
-                // 広い方のすき間の真ん中。入りきらなければ画面の端に寄せる
-                let left = p.lowerBound - area.minX, right = area.maxX - p.upperBound
-                let center = left >= right ? area.minX + left / 2 : p.upperBound + right / 2
-                x = center - size.width / 2
+                // 入りきらなければ画面の端に寄せる
+                x = gapCenter(in: area, person: box) - size.width / 2
                 x = min(max(x, area.minX + margin), area.maxX - size.width - margin)
             } else {
                 x = area.midX - size.width / 2
@@ -253,8 +258,8 @@ final class KeyboardWindow: NSPanel {
         isReleasedWhenClosed = false
         isFloatingPanel = true
         hidesOnDeactivate = false
-        // 人物の表示と同じ層 (手書きの線はその 1 つ上なので、キーボードの上に描ける)
-        level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()))
+        // 人物の表示の 1 つ上 (同じ層だと前後を取り合ってちらつく)。手書きの線はさらに上
+        level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()) + 1)
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
     }
 

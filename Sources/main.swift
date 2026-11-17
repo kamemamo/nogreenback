@@ -109,12 +109,13 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
     private var _subtitle = ""
     private var subtitleCache: (text: String, images: [String: CIImage])?
 
-    /// 字幕の画像 (文字と大きさが同じあいだは作り直さない)
-    private func subtitleImage(_ text: String, extent: CGRect) -> CIImage? {
+    /// 字幕の画像 (文字と大きさ・置く場所が同じあいだは作り直さない)
+    private func subtitleImage(_ text: String, extent: CGRect, person: ClosedRange<CGFloat>? = nil,
+                               bottom: CGFloat? = nil) -> CIImage? {
         if subtitleCache?.text != text { subtitleCache = (text, [:]) }
-        let key = "\(Int(extent.width))x\(Int(extent.height))"
+        let key = "\(Int(extent.width))x\(Int(extent.height)) \(person.map { "\(Int($0.lowerBound))-\(Int($0.upperBound))" } ?? "") \(bottom.map { Int($0) } ?? -1)"
         if let img = subtitleCache?.images[key] { return img }
-        let img = SubtitleRenderer.image(text: text, extent: extent)
+        let img = SubtitleRenderer.image(text: text, extent: extent, person: person, bottom: bottom)
         subtitleCache?.images[key] = img
         return img
     }
@@ -377,7 +378,10 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
         }
 
         // キーの説明用のキーボードを重ねる (手書きの線より下。背景があるときは Syphon にも)
+        // 字幕はキーボードより上に出す (キーボードが下にあるとき)
+        var keyboardTop: CGFloat?
         if let kb = keyboardImage(extent: canvas, person: px...(px + pw)) {
+            if kb.extent.midY < canvas.midY { keyboardTop = kb.extent.maxY }
             display = kb.composited(over: display).cropped(to: canvas)
             if background.latestImage != nil { source = display }
         }
@@ -388,12 +392,22 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
             if background.latestImage != nil { source = display }
         }
 
-        // 字幕を下の中央に重ねる (プレビュー・全画面出力・Syphon のすべて)
+        // 字幕を下に重ねる (プレビュー・全画面出力・Syphon のすべて)。
+        // 人物を出しているときは、人物にかからないよう反対側のすき間の真ん中に出す
         let text = subtitle
         if !text.isEmpty {
+            let personRange: ClosedRange<CGFloat>? = settings.showPerson ? px...(px + pw) : nil
             let se = source.extent, de = display.extent
-            if let sub = subtitleImage(text, extent: se) { source = sub.composited(over: source).cropped(to: se) }
-            if let sub = subtitleImage(text, extent: de) { display = sub.composited(over: display).cropped(to: de) }
+            // 背景がないときの Syphon は人物だけの映像なので、下の中央に出す
+            let sourceIsCanvas = background.latestImage != nil
+            if let sub = sourceIsCanvas
+                ? subtitleImage(text, extent: se, person: personRange, bottom: keyboardTop)
+                : subtitleImage(text, extent: se) {
+                source = sub.composited(over: source).cropped(to: se)
+            }
+            if let sub = subtitleImage(text, extent: de, person: personRange, bottom: keyboardTop) {
+                display = sub.composited(over: display).cropped(to: de)
+            }
         }
 
         // 3) テクスチャに描画して Syphon 送出
@@ -679,8 +693,8 @@ final class AnnotationWindow: NSPanel {
         isFloatingPanel = true
         hidesOnDeactivate = false
         becomesKeyOnlyIfNeeded = true
-        // 人物の表示 (OverlayWindow) より 1 つ上
-        level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()) + 1)
+        // 人物の表示 (OverlayWindow) より 2 つ上 (間に字幕とキーボードが入る)
+        level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()) + 2)
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
     }
 
@@ -2910,7 +2924,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     func setSubtitle(_ text: String) {
         processor.subtitle = text
         let covered = outputWindow != nil && outputScreen == overlayScreen
-        subtitleWindow.show(covered ? "" : text, on: overlayScreen)
+        // 画面に人物を出しているときは、人物の反対側に出す (キーボードが下にあればその上)
+        var person: ClosedRange<CGFloat>?
+        if overlayOn && personOn {
+            let right = overlayCorner == .bottomRight || overlayCorner == .topRight
+            let s = CGFloat(overlayScale)
+            person = right ? (1 - s)...1 : 0...s
+        }
+        var bottom: CGFloat?
+        if keyboardWindow.isVisible, keyboardWindow.frame.midY < overlayScreen.frame.midY {
+            bottom = keyboardWindow.frame.maxY
+        }
+        subtitleWindow.show(covered ? "" : text, on: overlayScreen, person: person, bottom: bottom)
     }
 
     @objc func personToggled(_ sender: NSButton) {
