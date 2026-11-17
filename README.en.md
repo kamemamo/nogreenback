@@ -121,12 +121,13 @@ Bring in audio from a capture card or audio interface, play it on a speaker, and
 
 ### ATEM switcher
 
-Switch inputs on a Blackmagic Design ATEM switcher (ATEM Mini and others).
+Switch inputs on a Blackmagic Design ATEM switcher (ATEM Mini and others) from the toolbar, over USB.
 
-- With the ATEM software (ATEM Software Control) installed, connect over USB (leave "Address" empty) or LAN (enter the ATEM's IP address). Without it, LAN only.
-- Once connected, input buttons and a **Mix** checkbox appear in the toolbar. The button you press goes to program; changes made on the ATEM are reflected too.
+- Plug in an ATEM over USB and it connects automatically: an "ATEM Switcher" section appears in the sidebar, and input buttons and a **Mix** checkbox appear in the toolbar. Unplug it and they go away. If it's plugged in at launch, it connects right away.
+- Controlling it over USB needs Blackmagic ATEM Software Control installed on that Mac (the sidebar tells you if it's missing).
+- The button you press goes to program; changes made on the ATEM are reflected too.
 - With **Mix** on, inputs change with a 0.5-second mix; off cuts immediately.
-- It reconnects automatically at launch. macOS may ask for Local Network permission the first time.
+- macOS may ask for Local Network permission the first time (a USB-connected ATEM appears to the Mac as a network device). Allow it.
 
 ### Subtitles
 

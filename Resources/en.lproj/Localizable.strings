@@ -161,19 +161,11 @@
 "全画面出力を閉じる（全画面出力を操作中のとき）" = "Close full-screen output (while it's active)";
 "終了" = "Quit";
 "取り込んだ音をスピーカーに出し、録画ではマイクと混ぜて 1 本の音声にします。話している間は録画の外部の音を自動で下げます。「音量」はスピーカーと録画の両方に効きます。" = "Plays incoming audio on the speaker and mixes it with the microphone into one track when recording. While you speak, the external audio in the recording is lowered automatically. \"Volume\" affects both the speaker and the recording.";
-"USB でつないでいるなら「アドレス」を空欄のまま、LAN なら ATEM の IP アドレスを入れて「つなぐ」を押します。つながると、上部に入力のボタンが出ます。押した入力が本番に出ます。" = "For USB, leave \"Address\" empty; for LAN, enter the ATEM's IP address. Then press \"Connect\". Once connected, input buttons appear at the top, and the input you press goes to program.";
-"ATEM を LAN ケーブルで同じネットワークにつなぎ、IP アドレスを入れて「つなぐ」を押します (USB で操作するには ATEM のソフトを入れてください)。つながると、上部に入力のボタンが出ます。押した入力が本番に出ます。" = "Connect the ATEM to the same network with a LAN cable, enter its IP address and press \"Connect\" (to use USB, install the ATEM software). Once connected, input buttons appear at the top, and the input you press goes to program.";
 "なし" = "None";
-"空欄なら USB" = "Empty for USB";
-"USB でつなぐなら空欄のまま。LAN でつなぐなら ATEM の IP アドレス (ATEM Software Control の「設定」で確認できます)" = "Leave empty for USB. For LAN, the ATEM's IP address (shown in ATEM Software Control settings)";
-"ATEM の IP アドレス (ATEM Software Control の「設定」で確認できます)" = "The ATEM's IP address (shown in ATEM Software Control settings)";
-"つなぐ" = "Connect";
 "押した入力を本番 (PGM) に出します" = "Sends the pressed input to program (PGM)";
 "オンにすると、ATEM で設定している切り替え効果 (ミックスなど) で移ります。ミックスは 0.5 秒。オフならすぐ切り替えます (カット)" = "When on, switches with the ATEM's transition (such as a mix). Mix is 0.5 s. When off, cuts immediately";
 "つながりました" = "Connected";
 "つないでいます…" = "Connecting…";
-"アドレス" = "Address";
-"切る" = "Disconnect";
 "使わない" = "Off";
 "出さない" = "None";
 "システムの出力" = "System output";
@@ -201,3 +193,5 @@
 "認識する言語" = "Language";
 "%@（%@）" = "%@ (%@)";
 "つながりました（%@）" = "Connected (%@)";
+"ATEM Software Control を入れると、USB で操作できます" = "Install ATEM Software Control to control it over USB";
+"ATEM を USB でつなぐと自動でつながり、上部に入力のボタンが出ます。押した入力が本番に出ます。外すとボタンも消えます。USB で操作するには、Blackmagic の ATEM Software Control を入れておいてください。" = "Plug in an ATEM over USB and it connects automatically, with input buttons at the top. The input you press goes to program. Unplug it and the buttons go away. To control it over USB, install Blackmagic ATEM Software Control.";

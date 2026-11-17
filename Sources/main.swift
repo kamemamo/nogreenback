@@ -1163,8 +1163,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     let micLevel = NSLevelIndicator()
     // ATEM スイッチャーの操作
     let atem = ATEMControl()
-    let atemHostField = NSTextField()
-    let atemConnectButton = NSButton()
+    let atemUSB = ATEMUSBWatcher()
+    /// サイドバーの ATEM の見出しと状態 (USB で ATEM がつながっている間だけ出す)
+    var atemSidebarViews: [NSView] = []
     let atemStatus = NSTextField(labelWithString: L("つないでいません"))
     let atemInputs = NSSegmentedControl()
     let atemMixCheck = NSButton(checkboxWithTitle: L("ミックス"), target: nil, action: nil)
@@ -1180,15 +1181,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     }()
     var atemInputIDs: [Int] = [1, 2, 3, 4]
     var atemProgram = 0
-    var atemHost: String {
-        get { UserDefaults.standard.string(forKey: "atemHost") ?? (ATEMControl.sdkAvailable ? "" : "192.168.10.240") }
-        set { UserDefaults.standard.set(newValue, forKey: "atemHost") }
-    }
-    /// 前回つないでいたら、起動したときにもつなぐ
-    var atemAutoConnect: Bool {
-        get { UserDefaults.standard.bool(forKey: "atemAutoConnect") }
-        set { UserDefaults.standard.set(newValue, forKey: "atemAutoConnect") }
-    }
     var atemConnected = false
     // 外部の音声: 取り込む機器、出すスピーカー、音量
     let externalAudio = ExternalAudio()
@@ -1705,7 +1697,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         refreshExtInputs()
         refreshExtOutputs()
         startExternal()
-        let atemSection = buildATEM()
+        atemSidebarViews = [sectionHeader(L("ATEM スイッチャー"))] + buildATEM()
+        atemSidebarViews.forEach { $0.isHidden = true }
+        atemUSB.start()
         let tuning = sideGrid([
             (L("ちらつき抑制"), smoothing), (L("消失の保持"), hold), (L("境界の締まり"), tighten),
             (L("境界ぼかし"), feather), (L("明るさ安定化"), deflicker),
@@ -1731,8 +1725,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
             sectionHeader(L("外部の音声")),
             sideGrid([(L("入力"), extInRow), (L("スピーカー"), extOutPopup), (L("音量"), extVolSlider),
                       (L("声で下げる"), duckPopup)]),
-            sectionHeader(L("ATEM スイッチャー")),
-        ] + atemSection
+        ] + atemSidebarViews
         let side = NSStackView(views: sections)
         side.orientation = .vertical
         side.alignment = .leading
@@ -2466,9 +2459,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         addMerged(header(L("外部の音声")), space: 16)
         addMerged(explain(L("取り込んだ音をスピーカーに出し、録画ではマイクと混ぜて 1 本の音声にします。話している間は録画の外部の音を自動で下げます。「音量」はスピーカーと録画の両方に効きます。")), space: 0)
         addMerged(header(L("ATEM スイッチャー")), space: 16)
-        addMerged(explain(ATEMControl.sdkAvailable
-            ? L("USB でつないでいるなら「アドレス」を空欄のまま、LAN なら ATEM の IP アドレスを入れて「つなぐ」を押します。つながると、上部に入力のボタンが出ます。押した入力が本番に出ます。")
-            : L("ATEM を LAN ケーブルで同じネットワークにつなぎ、IP アドレスを入れて「つなぐ」を押します (USB で操作するには ATEM のソフトを入れてください)。つながると、上部に入力のボタンが出ます。押した入力が本番に出ます。")), space: 0)
+        addMerged(explain(L("ATEM を USB でつなぐと自動でつながり、上部に入力のボタンが出ます。押した入力が本番に出ます。外すとボタンも消えます。USB で操作するには、Blackmagic の ATEM Software Control を入れておいてください。")), space: 0)
         grid.rowSpacing = 6
         grid.columnSpacing = 20
         grid.translatesAutoresizingMaskIntoConstraints = false
@@ -2541,19 +2532,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     // MARK: ATEM スイッチャー
 
     func buildATEM() -> [NSView] {
-        atemHostField.stringValue = atemHost
-        atemHostField.placeholderString = ATEMControl.sdkAvailable ? L("空欄なら USB") : "192.168.10.240"
-        atemHostField.toolTip = ATEMControl.sdkAvailable
-            ? L("USB でつなぐなら空欄のまま。LAN でつなぐなら ATEM の IP アドレス (ATEM Software Control の「設定」で確認できます)")
-            : L("ATEM の IP アドレス (ATEM Software Control の「設定」で確認できます)")
-        atemHostField.widthAnchor.constraint(equalToConstant: sideControlWidth - 76).isActive = true
-        atemConnectButton.bezelStyle = .rounded
-        atemConnectButton.title = L("つなぐ")
-        atemConnectButton.target = self
-        atemConnectButton.action = #selector(atemConnectClicked)
-        atemConnectButton.widthAnchor.constraint(equalToConstant: 70).isActive = true
-        let hostRow = NSStackView(views: [atemHostField, atemConnectButton])
-        hostRow.spacing = 6
         atemStatus.font = .systemFont(ofSize: 11)
         atemStatus.textColor = .secondaryLabelColor
         atemInputs.trackingMode = .selectOne
@@ -2585,8 +2563,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
             self.atemProgram = src
             self.showATEMProgram()
         }
-        if atemAutoConnect { setATEMConnected(true) }
-        return [sideGrid([(L("アドレス"), hostRow), ("", atemStatus)])]
+        // ATEM を USB で挿したらつなぎ、外したら切る (サイドバーの項目もそのときだけ出す)
+        atemUSB.onChange = { [weak self] present in self?.atemPlugged(present) }
+        return [sideGrid([("", atemStatus)])]
     }
 
     func setATEMInputs(_ list: [ATEMControl.Input]) {
@@ -2609,21 +2588,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         }
     }
 
-    func setATEMConnected(_ on: Bool) {
-        atemConnected = on
-        atemAutoConnect = on
-        atemConnectButton.title = on ? L("切る") : L("つなぐ")
-        atemToolbarGroup.isHidden = !on
-        atemHostField.isEnabled = !on
-        if on {
-            atemHost = atemHostField.stringValue.trimmingCharacters(in: .whitespaces)
-            atem.connect(atemHost)
-        } else {
-            atem.disconnect()
+    /// ATEM が USB で挿された・外された
+    func atemPlugged(_ present: Bool) {
+        atemSidebarViews.forEach { $0.isHidden = !present }
+        if present && !ATEMControl.sdkAvailable {
+            // USB で操作するには Blackmagic の ATEM Software Control が必要
+            atemStatus.stringValue = L("ATEM Software Control を入れると、USB で操作できます")
+            return
         }
+        setATEMConnected(present)
     }
 
-    @objc func atemConnectClicked() { setATEMConnected(!atemConnected) }
+    func setATEMConnected(_ on: Bool) {
+        atemConnected = on
+        atemToolbarGroup.isHidden = !on
+        if on { atem.connect("") } else { atem.disconnect() }
+    }
 
     @objc func atemInputClicked(_ sender: NSSegmentedControl) {
         let i = sender.selectedSegment
