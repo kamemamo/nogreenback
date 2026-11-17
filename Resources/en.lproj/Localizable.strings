@@ -56,10 +56,10 @@
 "上げるほど輪郭のちらつきが減ります。上げすぎると動いたときに残像が出ます" = "Higher reduces edge flicker. Too high leaves trails when you move";
 "上げるほど半透明の縁 (背景のにじみ) が減り、輪郭がくっきりします" = "Higher reduces semi-transparent edges (background bleed) for a crisper outline";
 "上げるほど、手をかざしたときなどに体の一部が一瞬消える現象を抑えます。上げすぎると、移動した後に元の位置がうっすら残ります" = "Higher keeps parts of your body from briefly vanishing (e.g. when raising a hand). Too high leaves a faint ghost after you move";
-"画面に表示" = "On Screen";
-"切り抜いた人物を、デスクトップの隅に常に手前で重ねます (クリックは後ろのアプリに届きます)" = "Shows the cut-out person in a corner of the desktop, always on top (clicks go through to the apps behind)";
+"ワイプ" = "PiP";
+"切り抜いた人物を、テレビのワイプのようにデスクトップの隅に小さく重ねて出します (クリックは後ろのアプリに届きます)。人物をどこにも出したくないときは「人物」をオフにします" = "Shows the cut-out person small in a corner of the desktop, picture-in-picture style (clicks go through to the apps behind). To hide the person everywhere, turn off \"Person\"";
 "人物" = "Person";
-"人物を出し入れします (全画面出力・プレビュー・Syphon・画面に重ねる表示のすべて)。オフにすると背景だけになります。%@P" = "Shows or hides the person (full-screen output, preview, Syphon and on-screen overlay). When off, only the background remains. %@P";
+"人物を出すかどうかの大もとのスイッチです。オフにすると、ワイプ・全画面・プレビュー・Syphon のすべてから人物が消えて、背景だけになります。%@P" = "The master switch for the person. When off, the person disappears from PiP, full screen, preview and Syphon, leaving only the background. %@P";
 "画面の幅に対する大きさ" = "Size relative to the screen width";
 "● 録画開始" = "● Record";
 "「録画する画面」を録画して、ムービーフォルダに保存します (このウィンドウは映りません)。%@R でも開始・停止できます" = "Records the \"Screen to record\" and saves it to your Movies folder (this window isn't recorded). %@R also starts and stops";
@@ -77,7 +77,7 @@
 "指し棒" = "Pointer";
 "マウスの位置を指し棒の矢印で指します (オンの間はマウスカーソルを隠します)。%@L" = "Points at the mouse position with a pointer stick (hides the mouse cursor while on). %@L";
 "USB キャプチャーなどの映像を人物の後ろに敷きます" = "Puts video from a USB capture device or similar behind the person";
-"全画面で出す" = "Full Screen";
+"全画面" = "Full Screen";
 "合成した映像を、選んだ画面いっぱいに表示します。Esc か %@F で閉じます" = "Shows the composited video filling the chosen screen. Close with Esc or %@F";
 "出す画面に合わせる" = "Match output screen";
 "カメラと同じ" = "Same as camera";

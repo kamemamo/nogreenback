@@ -57,7 +57,7 @@ final class Settings: @unchecked Sendable {
     /// 背景映像があるときの人物の位置 (OverlayWindow.Corner の rawValue) と、画面幅に対する大きさ
     var pipCorner: Int { get { get { _pipCorner } } set { set { _pipCorner = newValue } } }
     var pipScale: Double { get { get { _pipScale } } set { set { _pipScale = newValue } } }
-    /// 背景映像があるときに人物を入れるか (「画面に表示」・⌃⌥⌘P と連動)
+    /// 背景映像があるときに人物を入れるか (「人物」・⌃⌥⌘P と連動)
     var showPerson: Bool { get { get { _showPerson } } set { set { _showPerson = newValue } } }
     /// 合成した映像の横縦比 (0 = カメラの比率のまま)。全画面で出す画面の比率に合わせるときに使う
     var canvasAspect: Double { get { get { _canvasAspect } } set { set { _canvasAspect = newValue } } }
@@ -1381,12 +1381,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
 
         // 3 段目: 画面に重ねる表示
         overlay = OverlayWindow(processor: processor)
-        overlayCheck = toolbarToggle(L("画面に表示"), #selector(overlayToggled(_:)))
+        overlayCheck = toolbarToggle(L("ワイプ"), #selector(overlayToggled(_:)))
         overlayCheck.state = overlayOn ? .on : .off
-        overlayCheck.toolTip = L("切り抜いた人物を、デスクトップの隅に常に手前で重ねます (クリックは後ろのアプリに届きます)")
+        overlayCheck.toolTip = L("切り抜いた人物を、テレビのワイプのようにデスクトップの隅に小さく重ねて出します (クリックは後ろのアプリに届きます)。人物をどこにも出したくないときは「人物」をオフにします")
         personButton = toolbarToggle(L("人物"), #selector(personToggled(_:)))
         personButton.state = personOn ? .on : .off
-        personButton.toolTip = L("人物を出し入れします (全画面出力・プレビュー・Syphon・画面に重ねる表示のすべて)。オフにすると背景だけになります。%@P", HotKeys.modifierSymbols)
+        personButton.toolTip = L("人物を出すかどうかの大もとのスイッチです。オフにすると、ワイプ・全画面・プレビュー・Syphon のすべてから人物が消えて、背景だけになります。%@P", HotKeys.modifierSymbols)
         let cornerPopup = NSPopUpButton()
         cornerPopup.addItems(withTitles: OverlayWindow.Corner.allCases.map(\.title))
         cornerPopup.selectItem(at: overlayCorner.rawValue)
@@ -1542,7 +1542,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         bgPopup.target = self
         bgPopup.action = #selector(backgroundChanged(_:))
         bgPopup.toolTip = L("USB キャプチャーなどの映像を人物の後ろに敷きます")
-        outputCheck = toolbarToggle(L("全画面で出す"), #selector(outputToggled(_:)))
+        outputCheck = toolbarToggle(L("全画面"), #selector(outputToggled(_:)))
         outputCheck.toolTip = L("合成した映像を、選んだ画面いっぱいに表示します。Esc か %@F で閉じます", HotKeys.modifierSymbols)
         outputScreenPopup.target = self
         outputScreenPopup.action = #selector(outputScreenChanged(_:))

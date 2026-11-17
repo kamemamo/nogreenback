@@ -39,7 +39,7 @@ The first build clones Syphon-Framework into `vendor/` and builds it. To support
 
 ## The window
 
-- **Toolbar**: only what you use while presenting — Person, Full Screen, On Screen, Subtitles (and the subtitle settings button), Draw, Pen Lock, Clear, Keyboard, Pointer, ATEM inputs, ● Record, the frame rate, and ? (shortcuts and tips). Toggles are colored while on (red while recording).
+- **Toolbar**: only what you use while presenting — Person, Full Screen, PiP, Subtitles (and the subtitle settings button), Draw, Pen Lock, Clear, Keyboard, Pointer, ATEM inputs, ● Record, the frame rate, and ? (shortcuts and tips). Toggles are colored while on (red while recording).
 - **Left**: preview (transparent areas show a checkerboard).
 - **Right sidebar**: settings grouped by Camera, Cut-out Tuning, Person Position and Size, Background and Full-Screen Output, Draw, Keyboard, Recording, External Audio and ATEM Switcher.
 - **Shortcuts**: the ? button, Help > Keyboard Shortcuts, or ⌘/.
@@ -50,12 +50,12 @@ Add a "Syphon Client" source, choose `NoGreenBack`, and **check "Allow Transpare
 
 ## Overlaying on your screen without OBS
 
-Turn on **On Screen** to show the cut-out person in a corner of the screen, always on top. The background is transparent and clicks go through to the apps behind. Share your entire screen in Zoom or Teams and others see you over it (window sharing doesn't include it).
+Turn on **PiP** to show the cut-out person in a corner of the screen, always on top. The background is transparent and clicks go through to the apps behind. Share your entire screen in Zoom or Teams and others see you over it (window sharing doesn't include it).
 
 | Setting | Description |
 |---|---|
 | Person (toolbar) | Shows or hides the person everywhere (full-screen output, preview, Syphon, on-screen overlay) (⌃⌥⌘ P) |
-| On Screen (toolbar) | Shows the person in a corner of the desktop |
+| PiP (toolbar) | Shows the person in a corner of the desktop. "Person" is the master switch (off hides the person from PiP, full screen, preview and Syphon); "PiP" only turns the desktop overlay on or off |
 | Position | Bottom right / bottom left / top right / top left |
 | Size | Relative to the screen width (15–80%) |
 | Display screen | Which screen to show it on |
