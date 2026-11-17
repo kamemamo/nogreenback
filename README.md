@@ -34,14 +34,13 @@ Apple Silicon の Mac（macOS 12 以降）で動きます。Intel Mac にも対�
    ```
 
 2. `dist/NoGreenBack.zip` を AirDrop や USB などで他の Mac にコピーして展開し、`NoGreenBack.app` を「アプリケーション」フォルダに入れます。
-3. 初回だけ起動の許可が必要です（Apple の公証を受けていないため）。次のどちらかで許可します。
-   - ターミナルで次を実行してから、普通に開く
+3. Developer ID で署名して Apple の公証を受けている場合（`build.sh` はキーチェーンに Developer ID の証明書と公証の設定があれば自動で行います。GitHub のリリースの zip はこれです）は、そのままダブルクリックで開けます。
+   アドホック署名の zip（証明書なしでビルドしたもの）は、初回だけターミナルで次を実行してから開きます。
 
      ```bash
      xattr -dr com.apple.quarantine /Applications/NoGreenBack.app
      ```
 
-   - 一度開こうとしてブロックされたあと、「システム設定 > プライバシーとセキュリティ」の下の方にある「このまま開く」を押す
 4. 起動したらカメラへのアクセスを許可します。
 
 ## 画面の見かた

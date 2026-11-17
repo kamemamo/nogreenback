@@ -17,12 +17,7 @@ The app follows your Mac's language: English on an English (or other non-Japanes
 Runs on Apple Silicon Macs with macOS 12 or later.
 
 1. Download `NoGreenBack.zip` from [Releases](https://github.com/kamemamo/nogreenback/releases), open it, and move `NoGreenBack.app` to the Applications folder.
-2. The app isn't notarized by Apple, so the first time macOS may say it "is damaged and can't be opened". Click **Cancel**, then run this in Terminal and open the app normally:
-
-   ```bash
-   xattr -dr com.apple.quarantine /Applications/NoGreenBack.app
-   ```
-
+2. Release builds are signed with Developer ID and notarized by Apple, so just double-click to open.
 3. Allow camera access when asked.
 
 ## Build
@@ -32,6 +27,8 @@ Requirements: Apple Silicon Mac, Xcode, Metal Toolchain (`xcodebuild -downloadCo
 ```bash
 ./build.sh          # build NoGreenBack.app
 ./build.sh --zip    # also make dist/NoGreenBack.zip for other Macs
+                    # (signed with Developer ID and notarized if the certificate and
+                    #  a notarytool profile named "NoGreenBack" are set up)
 open NoGreenBack.app
 ```
 
