@@ -994,6 +994,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     /// 今話している文が出始めた時刻
     var utteranceStart: Date?
     var subtitleClearTimer: Timer?
+    /// 字幕を AI (Apple Intelligence) で直すか。選んだことがなければオン (使えない Mac では何もしない)
+    var subtitleAI: Bool {
+        get { UserDefaults.standard.object(forKey: "subtitleAI") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "subtitleAI") }
+    }
+    /// AI で直した文 (聞き取ったまま → 直したもの)。画面の字幕に出ている文を差し替えるのに使う
+    var subtitleCorrections: [(raw: String, fixed: String)] = []
+    /// 直前に確定した文 (AI に前後のつながりを伝える)
+    var recentFinals: [String] = []
+    /// 画面に出している字幕の、聞き取ったままの文字
+    var lastRawSubtitle = ""
+    var subtitleRefiner: AnyObject?
     let termsView = NSTextView()
     let termsCountLabel = NSTextField(labelWithString: "")
     var termsSaveTimer: Timer?
@@ -2947,6 +2959,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         languagePopup.action = #selector(subtitleLanguageChanged(_:))
         let languageRow = NSStackView(views: [NSTextField(labelWithString: L("認識する言語")), languagePopup])
         languageRow.spacing = 8
+        // AI で字幕を直す (Apple Intelligence。使えない Mac では選べない)
+        let aiCheck = NSButton(checkboxWithTitle: L("AI で聞き間違いを直す (Apple Intelligence)"), target: self,
+                               action: #selector(subtitleAIChanged(_:)))
+        let aiReason = SubtitleRefinerSupport.unavailableReason
+        aiCheck.state = subtitleAI && aiReason == nil ? .on : .off
+        aiCheck.isEnabled = aiReason == nil
+        aiCheck.toolTip = aiReason ?? L("話し終えた文を Mac の中の AI が読み直し、誤変換や専門用語の表記を直します。音声も文字もネットには送りません。キーの名前や英字・数字が変わる直しは使いません")
+        var aiViews: [NSView] = [aiCheck]
+        if let aiReason {
+            let note = NSTextField(labelWithString: aiReason)
+            note.font = .systemFont(ofSize: 11)
+            note.textColor = .secondaryLabelColor
+            aiViews.append(note)
+        }
+        let aiRow = NSStackView(views: aiViews)
+        aiRow.orientation = .vertical
+        aiRow.alignment = .leading
+        aiRow.spacing = 2
         let title = NSTextField(labelWithString: L("字幕の置き換え"))
         title.font = .boldSystemFont(ofSize: 13)
         // よく間違える言葉を「間違い → 正しい」と 1 行ずつ書く
@@ -2975,7 +3005,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         let save = NSButton(title: L("保存…"), target: self, action: #selector(saveTerms))
         let buttons = NSStackView(views: [termsCountLabel, NSView(), load, save])
         buttons.spacing = 8
-        let stack = NSStackView(views: [languageRow, title, termsBox, buttons, hint])
+        let stack = NSStackView(views: [languageRow, aiRow, title, termsBox, buttons, hint])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
@@ -2989,6 +3019,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         p.behavior = .transient
         p.contentViewController = vc
         return p
+    }
+
+    @objc func subtitleAIChanged(_ sender: NSButton) {
+        subtitleAI = sender.state == .on
+        if !subtitleAI { subtitleCorrections = [] }
     }
 
     /// 認識する言語を変えたら、字幕を出している途中ならその言語でやり直す
@@ -3051,23 +3086,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         termsCountLabel.textColor = n == 0 ? .secondaryLabelColor : .systemGreen
     }
 
-    /// 文が確定したら、録画中なら字幕ファイル用に時刻と一緒に残す
+    /// 文が確定したら、録画中なら字幕ファイル用に時刻と一緒に残し、AI で直す
     func subtitleFinalized(_ text: String) {
         let end = Date()
         let start = utteranceStart ?? end.addingTimeInterval(-2)
         utteranceStart = nil
-        guard recordingSubtitles else { return }
-        subtitleCues.append(.init(start: start.timeIntervalSince(recordStart),
-                                  end: end.timeIntervalSince(recordStart), text: text))
+        var cueIndex: Int?
+        if recordingSubtitles {
+            subtitleCues.append(.init(start: start.timeIntervalSince(recordStart),
+                                      end: end.timeIntervalSince(recordStart), text: text))
+            cueIndex = subtitleCues.count - 1
+        }
+        refineSubtitle(text, cueIndex: cueIndex)
+        recentFinals = Array((recentFinals + [text]).suffix(2))
+    }
+
+    /// 確定した文を AI で直し、直せたら画面の字幕と字幕ファイルの文を差し替える
+    func refineSubtitle(_ text: String, cueIndex: Int?) {
+        guard subtitleAI, SubtitleRefinerSupport.unavailableReason == nil else { return }
+        #if canImport(FoundationModels)
+        guard #available(macOS 26.0, *) else { return }
+        let refiner = (subtitleRefiner as? SubtitleRefiner) ?? SubtitleRefiner()
+        subtitleRefiner = refiner
+        let context = recentFinals, terms = subtitleTermList, english = subtitleLanguage.hasPrefix("en")
+        let recordingAt = recordStart
+        Task {
+            await refiner.refine(text, context: context, terms: terms, english: english) { fixed in
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, let fixed, fixed != text else { return }
+                    self.subtitleCorrections = Array((self.subtitleCorrections + [(text, fixed)]).suffix(10))
+                    // 同じ録画の字幕ファイルの文も直す
+                    if let i = cueIndex, self.recordingSubtitles, self.recordStart == recordingAt,
+                       self.subtitleCues.indices.contains(i), self.subtitleCues[i].text == text {
+                        self.subtitleCues[i].text = fixed
+                    }
+                    // まだ画面に出ていれば、直した文に差し替える
+                    if !self.lastRawSubtitle.isEmpty, self.subtitleButton.state == .on, !self.processor.subtitle.isEmpty {
+                        self.setSubtitle(self.corrected(self.lastRawSubtitle))
+                    }
+                }
+            }
+        }
+        #endif
+    }
+
+    /// 聞き取ったままの字幕に、AI で直した文を当てる
+    func corrected(_ text: String) -> String {
+        var t = text
+        for c in subtitleCorrections { t = t.replacingOccurrences(of: c.raw, with: c.fixed) }
+        return t
     }
 
     /// 字幕を出し、しばらく話さなければ消す
     func showSubtitle(_ text: String) {
         guard subtitleButton.state == .on else { return }
         if utteranceStart == nil, !text.isEmpty { utteranceStart = Date() }
-        setSubtitle(text)
+        lastRawSubtitle = text
+        setSubtitle(corrected(text))
         subtitleClearTimer?.invalidate()
         subtitleClearTimer = Timer.scheduledTimer(withTimeInterval: 4, repeats: false) { [weak self] _ in
+            self?.lastRawSubtitle = ""
             self?.setSubtitle("")
         }
     }

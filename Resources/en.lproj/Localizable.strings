@@ -195,3 +195,10 @@
 "つながりました（%@）" = "Connected (%@)";
 "ATEM Software Control を入れると、USB で操作できます" = "Install ATEM Software Control to control it over USB";
 "ATEM を USB でつなぐと自動でつながり、上部に入力のボタンが出ます。押した入力が本番に出ます。外すとボタンも消えます。USB で操作するには、Blackmagic の ATEM Software Control を入れておいてください。" = "Plug in an ATEM over USB and it connects automatically, with input buttons at the top. The input you press goes to program. Unplug it and the buttons go away. To control it over USB, install Blackmagic ATEM Software Control.";
+"システム設定で Apple Intelligence をオンにすると使えます" = "Available when Apple Intelligence is turned on in System Settings";
+"macOS 26 以降で使えます" = "Requires macOS 26 or later";
+"Apple Intelligence の準備中です。しばらくすると使えます" = "Apple Intelligence is getting ready. It will be available shortly";
+"話し終えた文を Mac の中の AI が読み直し、誤変換や専門用語の表記を直します。音声も文字もネットには送りません。キーの名前や英字・数字が変わる直しは使いません" = "When you finish a sentence, the AI on your Mac rereads it and fixes misrecognized words and the spelling of technical terms. Nothing is sent over the internet. Corrections that would change key names, letters or numbers are not used";
+"Apple Intelligence が使えません" = "Apple Intelligence isn't available";
+"この Mac は Apple Intelligence に対応していません" = "This Mac doesn't support Apple Intelligence";
+"AI で聞き間違いを直す (Apple Intelligence)" = "Fix mishearings with AI (Apple Intelligence)";

@@ -132,6 +132,7 @@ Turn on **Subtitles** (⌃⌥⌘ S) to turn your speech into subtitles on your M
 
 - **Language**: Japanese or English, chosen with the button next to Subtitles. By default it follows the app's language.
 - Subtitles appear at the bottom of the preview, full-screen output, Syphon and the display screen — in the gap opposite the person when the person is shown, and above the keyboard when it's shown.
+- **Fix mishearings with AI** (Apple Intelligence; macOS 26 or later with Apple Intelligence on): after each sentence, the on-device AI rereads it and fixes misrecognized words and technical terms, then updates the subtitle on screen and in the subtitle file. Nothing is sent over the internet. Corrections that would change key names, letters or numbers are discarded. Turn it on or off with the button next to Subtitles (on by default where available).
 - **Replacements**: write often-misheard words one per line as `wrong → right` (`->` or `=` also work) and they're fixed everywhere. Save and load the list as a file.
 - **When recording**, subtitles aren't burned into the picture. They're saved as a subtitle track inside the .mp4 and as a .srt file with the same name. When you record the full-screen output, the subtitles in it are recorded.
 - Works best on macOS 26 or later (earlier versions need Dictation turned on). The first time, recognition data for the language is downloaded and Microphone and Speech Recognition permissions are needed.
