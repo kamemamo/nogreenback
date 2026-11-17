@@ -1490,7 +1490,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
                 self.refreshCameras()
                 if name == AVCaptureDevice.wasConnectedNotification,
                    let d = note.object as? AVCaptureDevice, d.hasMediaType(.video) {
-                    if d.uniqueID == self.currentDevice?.uniqueID { self.reopenCamera(d) }
+                    if d.uniqueID == self.currentDevice?.uniqueID {
+                        self.reopenCamera(d)
+                    } else if self.currentDevice == nil,
+                              d.uniqueID != self.processor.background.device?.uniqueID,
+                              let cam = self.devices.first(where: { $0.uniqueID == d.uniqueID }) {
+                        // カメラなしで起動していたら、つながったカメラをそのまま使い始める
+                        self.reopenCamera(cam)
+                        self.refreshCameras()
+                    }
                     if d.uniqueID == self.processor.background.device?.uniqueID {
                         self.refreshBackgrounds()
                         self.applyBackground(reopenDevice: true)
@@ -1936,8 +1944,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     }
 
     func startSession() {
-        guard !devices.isEmpty else { showAlert(L("カメラが見つかりません")); return }
-        configure(device: devices[0])
+        // 映像の受け取り口は、カメラがなくても先に用意しておく
+        // (あとからカメラをつないだときに、受け取り口がなくて画面が白いままにならないように)
         let output = AVCaptureVideoDataOutput()
         output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
                                 kCVPixelBufferMetalCompatibilityKey as String: true]
@@ -1946,6 +1954,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         session.beginConfiguration()
         if session.canAddOutput(output) { session.addOutput(output) }
         session.commitConfiguration()
+        guard !devices.isEmpty else {
+            showAlert(L("カメラが見つかりません。カメラをつなぐと、自動で映ります。"))
+            return
+        }
+        configure(device: devices[0])
         videoQueue.async {
             self.session.startRunning()
             // セッション開始時にフレームレートが既定値へ戻ることがあるので、開始後にも設定する
@@ -3195,7 +3208,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     @objc func cameraChanged() {
         let i = cameraPopup.indexOfSelectedItem
         guard devices.indices.contains(i) else { return }
-        configure(device: devices[i])
+        // カメラなしで起動していたときも映るよう、止まっているセッションは動かし直す
+        reopenCamera(devices[i])
     }
 
     @objc func qualityChanged(_ sender: NSPopUpButton) {

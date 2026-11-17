@@ -133,7 +133,7 @@
 "音量" = "Volume";
 "声で下げる" = "Duck for voice";
 "ATEM スイッチャー" = "ATEM Switcher";
-"カメラが見つかりません" = "No camera found";
+"カメラが見つかりません。カメラをつなぐと、自動で映ります。" = "No camera found. Connect a camera and it will show up automatically.";
 "カメラを開けません: %@" = "Can't open the camera: %@";
 "表示する画面と同じ" = "Same as display screen";
 "なし（透明）" = "None (transparent)";
