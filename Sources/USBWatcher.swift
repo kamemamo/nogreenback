@@ -33,8 +33,9 @@ final class ATEMUSBWatcher {
         }
         for (type, iter) in [(kIOFirstMatchNotification, \ATEMUSBWatcher.addedIter),
                              (kIOTerminatedNotification, \ATEMUSBWatcher.removedIter)] {
-            let matching = IOServiceMatching("IOUSBHostDevice") as NSMutableDictionary
-            matching["idVendor"] = Self.blackmagicVendorID
+            // USB の機器は「メーカー番号だけ」では探せない (製品番号などと組みで決まっている) ので、
+            // USB の機器すべての出入りを見て、数え直すときに Blackmagic の ATEM だけを選ぶ
+            let matching = IOServiceMatching("IOUSBHostDevice")
             var it: io_iterator_t = 0
             IOServiceAddMatchingNotification(p, type, matching, callback, me, &it)
             self[keyPath: iter] = it
@@ -47,13 +48,18 @@ final class ATEMUSBWatcher {
 
     /// いまつながっている Blackmagic の USB 機器から、ATEM を探す
     private func refresh() {
-        let matching = IOServiceMatching("IOUSBHostDevice") as NSMutableDictionary
-        matching["idVendor"] = Self.blackmagicVendorID
         var it: io_iterator_t = 0
         var found = false
-        if IOServiceGetMatchingServices(kIOMainPortDefault, matching, &it) == KERN_SUCCESS {
+        if IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("IOUSBHostDevice"), &it) == KERN_SUCCESS {
             var obj = IOIteratorNext(it)
             while obj != 0 {
+                let vendor = IORegistryEntryCreateCFProperty(obj, "idVendor" as CFString, kCFAllocatorDefault, 0)?
+                    .takeRetainedValue() as? Int
+                guard vendor == Self.blackmagicVendorID else {
+                    IOObjectRelease(obj)
+                    obj = IOIteratorNext(it)
+                    continue
+                }
                 let name = IORegistryEntryCreateCFProperty(obj, "USB Product Name" as CFString, kCFAllocatorDefault, 0)?
                     .takeRetainedValue() as? String ?? ""
                 // 名前が読めないときも ATEM とみなす (読めないと項目が出ず、つなげなくなるため)
