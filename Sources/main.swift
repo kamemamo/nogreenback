@@ -129,6 +129,12 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
         get { previewLock.lock(); defer { previewLock.unlock() }; return _annotationImage }
         set { previewLock.lock(); _annotationImage = newValue; previewLock.unlock() }
     }
+    private var _pointerTip: CGPoint?
+    /// 指し棒の先 (合成した映像の座標。nil なら出さない)
+    var pointerTip: CGPoint? {
+        get { previewLock.lock(); defer { previewLock.unlock() }; return _pointerTip }
+        set { previewLock.lock(); _pointerTip = newValue; previewLock.unlock() }
+    }
     /// 映像に重ねるキーボード (nil なら出さない)。大きさは映像の横幅に対する割合
     private var _keyboard: (scale: Double, position: KeyboardRenderer.Position)?
     private var keyboardCache: (key: String, image: CIImage?)?
@@ -390,6 +396,16 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
         if let lines = annotationImage, lines.extent.size == canvas.size {
             display = lines.composited(over: display).cropped(to: canvas)
             if background.latestImage != nil { source = display }
+        }
+
+        // 指し棒 (全画面出力の上のマウスの位置を、人物のいる側から差し出した棒の矢印で指す)
+        if let tip = pointerTip {
+            let right = corner == .bottomRight || corner == .topRight
+            let start = PointerRenderer.base(tip: tip, in: canvas, right: right)
+            if let stick = PointerRenderer.ciImage(extent: canvas, from: start, to: tip) {
+                display = stick.composited(over: display).cropped(to: canvas)
+                if background.latestImage != nil { source = display }
+            }
         }
 
         // 字幕を下に重ねる (プレビュー・全画面出力・Syphon のすべて)。
@@ -902,6 +918,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         set { UserDefaults.standard.set(newValue, forKey: "personOn") }
     }
     var personButton = NSButton()
+    // 指し棒
+    var pointerButton = NSButton()
+    lazy var pointerWindow = PointerWindow()
+    var pointerTimer: Timer?
+    var lastPointerLocation: CGPoint?
     // キーの説明用のキーボード
     var keyboardButton = NSButton()
     lazy var keyboardWindow = KeyboardWindow()
@@ -996,6 +1017,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         if let outputWindow { n.append(outputWindow.windowNumber) }
         // キーボードも録画に映す (説明に使うため)
         if keyboardWindow.isVisible { n.append(keyboardWindow.windowNumber) }
+        if pointerWindow.isVisible { n.append(pointerWindow.windowNumber) }
         // デスクトップの字幕は録画に焼き込まない (字幕は .srt ファイルとして別に残す)
         return n
     }
@@ -1265,6 +1287,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         outputWindow?.orderOut(nil)
         subtitleWindow.orderOut(nil)
         keyboardWindow.orderOut(nil)
+        pointerTimer?.invalidate()
+        pointerTimer = nil
+        pointerWindow.orderOut(nil)
     }
 
     // MARK: UI
@@ -1471,6 +1496,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         keyboardButton = toolbarToggle("キーボード", #selector(keyboardToggled(_:)))
         keyboardButton.state = keyboardOn ? .on : .off
         keyboardButton.toolTip = "キーボード (JIS 配列・テンキー付き。Mac と Windows のキーの名前入り) の絵を出します。手書きで「このキー」と示すときに使います。\(HotKeys.modifierSymbols)B"
+        pointerButton = toolbarToggle("指し棒", #selector(pointerToggled(_:)))
+        pointerButton.toolTip = "マウスの位置を、人物のいる側から差し出した指し棒の矢印で指します。\(HotKeys.modifierSymbols)L"
         let keyboardPositionPopup = NSPopUpButton()
         keyboardPositionPopup.addItems(withTitles: KeyboardRenderer.Position.allCases.map(\.title))
         keyboardPositionPopup.selectItem(at: keyboardPosition.rawValue)
@@ -1558,7 +1585,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         // 上部: 本番中に触るボタンだけを並べる (オンのときは色が付く)
         let toolbar = NSStackView(views: [
             personButton, outputCheck, overlayCheck, subtitleButton, termsButton, toolbarSeparator(),
-            annotationCheck, penButton, clearButton, keyboardButton, atemToolbarGroup, NSView(),
+            annotationCheck, penButton, clearButton, keyboardButton, pointerButton, atemToolbarGroup, NSView(),
             recordButton, recordLabel, fpsLabel, helpButton,
         ])
         toolbar.orientation = .horizontal
@@ -2184,6 +2211,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         updateKeyboard()
     }
 
+    // MARK: 指し棒
+
+    @objc func pointerToggled(_ sender: NSButton) { setPointer(sender.state == .on) }
+    func togglePointer() { setPointer(pointerTimer == nil) }
+
+    func setPointer(_ on: Bool) {
+        pointerButton.state = on ? .on : .off
+        pointerTimer?.invalidate()
+        pointerTimer = nil
+        lastPointerLocation = nil
+        if on {
+            // マウスの位置を 1 秒に 60 回調べる (許可は要らない)
+            let t = Timer(timeInterval: 1.0 / 60, repeats: true) { [unowned self] _ in self.updatePointer() }
+            RunLoop.main.add(t, forMode: .common)
+            pointerTimer = t
+            updatePointer()
+        } else {
+            pointerWindow.orderOut(nil)
+            processor.pointerTip = nil
+            updateRecordedWindows()
+        }
+    }
+
+    /// マウスのある画面に指し棒を描く。全画面出力の画面なら、合成した映像の中に描く
+    func updatePointer() {
+        let m = NSEvent.mouseLocation
+        guard m != lastPointerLocation else { return }
+        lastPointerLocation = m
+        guard let screen = NSScreen.screens.first(where: { NSMouseInRect(m, $0.frame, false) }) else { return }
+        let wasVisible = pointerWindow.isVisible
+        if outputWindow != nil, screen == outputScreen, let canvas = processor.latestImage?.extent, canvas.width > 0 {
+            // 全画面出力は映像を画面に収まるように拡大して真ん中に出している。その逆をたどる
+            pointerWindow.orderOut(nil)
+            let sf = screen.frame
+            let s = min(sf.width / canvas.width, sf.height / canvas.height)
+            let tx = (sf.width - canvas.width * s) / 2, ty = (sf.height - canvas.height * s) / 2
+            processor.pointerTip = CGPoint(x: (m.x - sf.minX - tx) / s, y: (m.y - sf.minY - ty) / s)
+        } else {
+            processor.pointerTip = nil
+            // 人物のいる側から斜めに差し出す
+            let right = overlayCorner == .bottomRight || overlayCorner == .topRight
+            pointerWindow.show(on: screen, from: PointerRenderer.base(tip: m, in: screen.frame, right: right), to: m)
+        }
+        if pointerWindow.isVisible != wasVisible { updateRecordedWindows() }
+    }
+
     // MARK: キーの説明用のキーボード
 
     /// 映像 (プレビュー・全画面出力・Syphon) と、全画面出力に隠れていなければ画面にも出す
@@ -2240,6 +2313,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
             ("F", kVK_ANSI_F, "全画面出力の表示・非表示", { [weak self] in self?.toggleOutput() }),
             ("S", kVK_ANSI_S, "字幕のオン・オフ", { [weak self] in self?.toggleSubtitles() }),
             ("B", kVK_ANSI_B, "キーボードの表示・非表示", { [weak self] in self?.toggleKeyboard() }),
+            ("L", kVK_ANSI_L, "指し棒のオン・オフ", { [weak self] in self?.togglePointer() }),
         ]
     }
 
