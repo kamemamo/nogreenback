@@ -1,4 +1,4 @@
-// キーの操作を説明するための、キーボードの絵 (JIS 配列。Mac と Windows の両方の名前を書く)
+// キーの操作を説明するための、キーボードの絵 (JIS 配列か US 配列。Mac と Windows の両方の名前を書く)
 // 映像に重ねたり画面に出したりして、手書きで「このキー」と示す
 
 import AppKit
@@ -20,6 +20,20 @@ enum KeyboardRenderer {
         var shift: String? = nil
     }
 
+    /// 配列
+    enum Layout: Int, CaseIterable {
+        case jis, us
+        var title: String { [L("JIS (日本語)"), L("US (英語)")][rawValue] }
+    }
+    /// いま描く配列 (メインスレッドで変える。映像の処理からも読む)
+    nonisolated(unsafe) static var layout: Layout = .jis
+
+    /// US 配列で shift を押して出る文字 (テンキー以外)
+    static let shiftedUS: [String: String] = [
+        "`": "~", "1": "!", "2": "@", "3": "#", "4": "$", "5": "%", "6": "^", "7": "&", "8": "*", "9": "(", "0": ")",
+        "-": "_", "=": "+", "[": "{", "]": "}", "\\": "|", ";": ":", "'": "\"", ",": "<", ".": ">", "/": "?",
+    ]
+
     /// JIS 配列で shift を押して出る文字 (テンキー以外)
     static let shifted: [String: String] = [
         "1": "!", "2": "\"", "3": "#", "4": "$", "5": "%", "6": "&", "7": "'", "8": "(", "9": ")",
@@ -40,15 +54,20 @@ enum KeyboardRenderer {
     static let symbols = ["shift": "⇧", "control": "⌃", "option": "⌥", "command": "⌘",
                           "tab": "⇥", "delete": "⌫", "return": "↩", "caps": "⇪"]
 
-    static let keys: [Key] = {
+    static let jisKeys = makeKeys(.jis)
+    static let usKeys = makeKeys(.us)
+    static var keys: [Key] { layout == .jis ? jisKeys : usKeys }
+
+    private static func makeKeys(_ layout: Layout) -> [Key] {
         var keys: [Key] = []
+        let shiftTable = layout == .jis ? shifted : shiftedUS
         /// 左から順に並べる。items は (Mac の名前, Windows の名前, 幅)
         func row(_ y: CGFloat, h: CGFloat = 1, from x0: CGFloat = 0, _ items: [(String, String?, CGFloat)]) {
             var x = x0
             for (mac, win, w) in items {
                 let big = win == nil && mac.count == 1
                 // テンキーには shift の文字を付けない
-                let shift = x < mainWidth ? shifted[mac] : nil
+                let shift = x < mainWidth ? shiftTable[mac] : nil
                 keys.append(Key(mac: mac, win: win, x: x, y: y, w: w, h: h, big: big, shift: shift))
                 x += w
             }
@@ -59,13 +78,22 @@ enum KeyboardRenderer {
         let fw = (mainWidth - 1.5) / 12
         row(0, h: fnRow, [("esc", nil, 1.5)] + (1...12).map { ("F\($0)", nil, fw) })
         let y1 = fnRow
-        // 数字の行 (左端は Windows だけの 半角/全角)
-        row(y1, [("", "半/全", 1)] + chars("1234567890-^¥") + [("delete", "BS", 1)])
-        row(y1 + 1, [("tab", nil, 1.5)] + chars("QWERTYUIOP@["))          // 右端は return (別に描く)
-        row(y1 + 2, [("control", "Caps", 1.75)] + chars("ASDFGHJKL;:]"))
-        row(y1 + 3, [("shift", nil, 2.25)] + chars("ZXCVBNM,./") + [("_", "\\", 1), ("shift", nil, 1.75)])
-        row(y1 + 4, [("caps", "Ctrl", 1), ("option", "Win", 1), ("command", "Alt", 1.25), ("英数", "無変換", 1.25),
-                     ("", nil, 3.75), ("かな", "変換", 1.25), ("command", "Alt", 1.25), ("option", "Ctrl", 1.25)])
+        if layout == .jis {
+            // 数字の行 (左端は Windows だけの 半角/全角)
+            row(y1, [("", "半/全", 1)] + chars("1234567890-^¥") + [("delete", "BS", 1)])
+            row(y1 + 1, [("tab", nil, 1.5)] + chars("QWERTYUIOP@["))          // 右端は return (別に描く)
+            row(y1 + 2, [("control", "Caps", 1.75)] + chars("ASDFGHJKL;:]"))
+            row(y1 + 3, [("shift", nil, 2.25)] + chars("ZXCVBNM,./") + [("_", "\\", 1), ("shift", nil, 1.75)])
+            row(y1 + 4, [("caps", "Ctrl", 1), ("option", "Win", 1), ("command", "Alt", 1.25), ("英数", "無変換", 1.25),
+                         ("", nil, 3.75), ("かな", "変換", 1.25), ("command", "Alt", 1.25), ("option", "Ctrl", 1.25)])
+        } else {
+            row(y1, chars("`1234567890-=") + [("delete", "Backspace", 2)])
+            row(y1 + 1, [("tab", nil, 1.5)] + chars("QWERTYUIOP[]") + [("\\", nil, 1.5)])
+            row(y1 + 2, [("caps", "Caps", 1.75)] + chars("ASDFGHJKL;'") + [("return", "Enter", 2.25)])
+            row(y1 + 3, [("shift", nil, 2.25)] + chars("ZXCVBNM,./") + [("shift", nil, 2.75)])
+            row(y1 + 4, [("fn", "Ctrl", 1), ("control", "Win", 1), ("option", "Alt", 1), ("command", nil, 1.25),
+                         ("", nil, 5.5), ("command", "Alt", 1.25), ("option", "Ctrl", 1)])
+        }
         // 矢印 (上下は半分の高さ)
         keys.append(Key(mac: "←", x: mainWidth - 3, y: y1 + 4.5, h: 0.5))
         keys.append(Key(mac: "↑", x: mainWidth - 2, y: y1 + 4, h: 0.5))
@@ -82,7 +110,7 @@ enum KeyboardRenderer {
         keys.append(Key(mac: "+", x: nx + 3, y: y1 + 1, h: 2, big: true))
         keys.append(Key(mac: "enter", win: "Enter", x: nx + 3, y: y1 + 3, h: 2))
         return keys
-    }()
+    }
 
     /// 横幅 width ピクセルのキーボードの画像
     static func image(width pixelWidth: CGFloat) -> CGImage? {
@@ -169,7 +197,8 @@ enum KeyboardRenderer {
             drawLabel(key, in: r)
         }
 
-        // return (JIS は 2 行にまたがる L 字)
+        // return (JIS は 2 行にまたがる L 字。US はふつうのキーとして並べてある)
+        guard layout == .jis else { return ctx.makeImage() }
         let top = (pad + fnRow + 1) * unit + gap / 2
         let right = (pad + mainWidth) * unit - gap / 2
         let upperLeft = (pad + 13.5) * unit + gap / 2
@@ -194,7 +223,7 @@ enum KeyboardRenderer {
     enum Position: Int, CaseIterable {
         /// 人物の反対側の下 (人物が右なら左下、左なら右下)
         case auto, bottom, bottomLeft, bottomRight, top
-        var title: String { ["人物の反対側", "下の中央", "左下", "右下", "上の中央"][rawValue] }
+        var title: String { [L("人物の反対側"), L("下の中央"), L("左下"), L("右下"), L("上の中央")][rawValue] }
     }
 
     /// 領域 area の中で、キーボードを置く枠 (左下原点)
@@ -272,7 +301,7 @@ final class KeyboardWindow: NSPanel {
         guard let screen else { orderOut(nil); return }
         let sf = screen.frame
         let bs = screen.backingScaleFactor
-        let key = "\(sf.width)x\(sf.height)@\(bs) \(scale)"
+        let key = "\(sf.width)x\(sf.height)@\(bs) \(scale) \(KeyboardRenderer.layout.rawValue)"
         if key != cacheKey, let cg = KeyboardRenderer.image(width: sf.width * CGFloat(scale) * bs) {
             cacheKey = key
             imageView.image = NSImage(cgImage: cg, size: NSSize(width: CGFloat(cg.width) / bs,

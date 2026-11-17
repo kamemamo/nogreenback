@@ -146,7 +146,7 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
     /// person は人物の左右の範囲 (「人物の反対側」のとき、すき間の真ん中に置くため)
     private func keyboardImage(extent: CGRect, person: ClosedRange<CGFloat>) -> CIImage? {
         guard let k = keyboard else { return nil }
-        let key = "\(Int(extent.width))x\(Int(extent.height)) \(k.scale) \(k.position.rawValue) \(Int(person.lowerBound))-\(Int(person.upperBound))"
+        let key = "\(Int(extent.width))x\(Int(extent.height)) \(k.scale) \(k.position.rawValue) \(Int(person.lowerBound))-\(Int(person.upperBound)) \(KeyboardRenderer.layout.rawValue)"
         if keyboardCache?.key != key {
             keyboardCache = (key, KeyboardRenderer.ciImage(extent: extent, scale: k.scale, position: k.position,
                                                            person: person))
@@ -585,7 +585,7 @@ final class OverlayWindow: NSPanel {
 
     enum Corner: Int, CaseIterable {
         case bottomRight, bottomLeft, topRight, topLeft
-        var title: String { ["右下", "左下", "右上", "左上"][rawValue] }
+        var title: String { [L("右下"), L("左下"), L("右上"), L("左上")][rawValue] }
     }
 
     /// 画面幅に対する割合 (scale) で大きさを決め、指定の隅に置く (映像は 16:9)
@@ -841,10 +841,10 @@ final class RecordingPanel: NSPanel {
         back.wantsLayer = true
         back.layer?.cornerRadius = 22
         back.layer?.masksToBounds = true
-        let button = ToggleButton(title: "■ 録画停止", target: target, action: action)
+        let button = ToggleButton(title: L("■ 録画停止"), target: target, action: action)
         button.onColor = .systemRed
         button.state = .on
-        button.toolTip = "録画を止めて、操作ウィンドウを戻します (\(HotKeys.modifierSymbols)R)"
+        button.toolTip = L("録画を止めて、操作ウィンドウを戻します (%@R)", HotKeys.modifierSymbols)
         timeLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
         timeLabel.textColor = .white
         let row = NSStackView(views: [button, timeLabel])
@@ -894,9 +894,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     var currentDevice: AVCaptureDevice?
     /// 選べるフレームレート。50Hz 地域 (東日本) は 25/20fps、60Hz 地域 (西日本) は 30fps でフリッカーが出にくい
     let frameRates: [(fps: Int32, title: String)] = [
-        (30, "30fps (60Hz・西日本)"),
-        (25, "25fps (50Hz・東日本)"),
-        (20, "20fps (50Hz・より安定)"),
+        (30, L("30fps (60Hz・西日本)")),
+        (25, L("25fps (50Hz・東日本)")),
+        (20, L("20fps (50Hz・より安定)")),
     ]
     var targetFPS: Int32 {
         get { let v = UserDefaults.standard.integer(forKey: "frameRate"); return v > 0 ? Int32(v) : 25 }
@@ -936,6 +936,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         get { (UserDefaults.standard.object(forKey: "keyboardPlace") as? Int).flatMap { .init(rawValue: $0) } ?? .auto }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "keyboardPlace") }
     }
+    /// キーボードの配列。選んだことがなければ、アプリの表示が英語なら US、それ以外は JIS
+    var keyboardLayout: KeyboardRenderer.Layout {
+        get {
+            (UserDefaults.standard.object(forKey: "keyboardLayout") as? Int).flatMap { .init(rawValue: $0) }
+                ?? (appIsEnglish ? .us : .jis)
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "keyboardLayout") }
+    }
     /// キーボード (テンキー込み) の横幅の、映像の横幅に対する割合
     var keyboardScale: Double {
         get { UserDefaults.standard.object(forKey: "keyboardSize") as? Double ?? 0.58 }
@@ -944,6 +952,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     // 字幕
     var subtitleButton = NSButton()
     let subtitles = SubtitleEngine()
+    /// 字幕で認識する言語 (表示名, 言語の ID)
+    static let subtitleLanguages: [(title: String, id: String)] = [("日本語", "ja-JP"), ("English", "en-US")]
+    /// 字幕で認識する言語。選んだことがなければ、アプリの表示が英語なら英語、それ以外は日本語
+    var subtitleLanguage: String {
+        get { UserDefaults.standard.string(forKey: "subtitleLanguage") ?? (appIsEnglish ? "en-US" : "ja-JP") }
+        set { UserDefaults.standard.set(newValue, forKey: "subtitleLanguage") }
+    }
     /// デスクトップに出す字幕 (録画にも映る)
     lazy var subtitleWindow = SubtitleWindow()
     /// 録画中に確定した字幕 (録画を止めたら .srt に保存する)
@@ -1089,7 +1104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     func updateRecordSizeLabel() {
         let r = recordSettings
         let gb = Double(r.videoMbps * 1000 + r.audioKbps) * 3600 / 8 / 1_000_000
-        recordSizeLabel.stringValue = String(format: "1 時間で最大 約 %.1f GB", gb)
+        recordSizeLabel.stringValue = String(format: L("1 時間で最大 約 %.1f GB"), gb)
     }
 
     @objc func recordMbpsChanged(_ sender: NSPopUpButton) {
@@ -1123,9 +1138,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     let atem = ATEMControl()
     let atemHostField = NSTextField()
     let atemConnectButton = NSButton()
-    let atemStatus = NSTextField(labelWithString: "つないでいません")
+    let atemStatus = NSTextField(labelWithString: L("つないでいません"))
     let atemInputs = NSSegmentedControl()
-    let atemMixCheck = NSButton(checkboxWithTitle: "ミックス", target: nil, action: nil)
+    let atemMixCheck = NSButton(checkboxWithTitle: L("ミックス"), target: nil, action: nil)
     /// 上部に並べる ATEM の入力ボタンとミックスのチェック (つないでいる間だけ出す)
     lazy var atemToolbarGroup: NSStackView = {
         let label = NSTextField(labelWithString: "ATEM")
@@ -1164,7 +1179,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         set { UserDefaults.standard.set(newValue, forKey: "externalOutputUID") }
     }
     /// 声で外部の音を下げるときの倍率 (1 なら下げない)
-    static let duckChoices: [(String, Float)] = [("下げない", 1), ("少し (-6dB)", 0.5), ("半分くらい (-12dB)", 0.25), ("大きく (-20dB)", 0.1)]
+    static let duckChoices: [(String, Float)] = [(L("下げない"), 1), (L("少し (-6dB)"), 0.5), (L("半分くらい (-12dB)"), 0.25), (L("大きく (-20dB)"), 0.1)]
     var extDuck: Float {
         get { UserDefaults.standard.object(forKey: "externalDuck") as? Float ?? 0.25 }
         set { UserDefaults.standard.set(newValue, forKey: "externalDuck") }
@@ -1197,10 +1212,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         ("⌥ Option", .option), ("⌃ Control", .control), ("⌥⌘ Option+Command", [.option, .command]),
     ]
     let penColors: [(title: String, color: NSColor)] = [
-        ("赤", .systemRed), ("黄", .systemYellow), ("青", .systemBlue), ("緑", .systemGreen), ("白", .white), ("黒", .black),
+        (L("赤"), .systemRed), (L("黄"), .systemYellow), (L("青"), .systemBlue), (L("緑"), .systemGreen), (L("白"), .white), (L("黒"), .black),
     ]
     let fadeTimes: [(title: String, seconds: TimeInterval)] = [
-        ("消さない", 0), ("3秒で消す", 3), ("10秒で消す", 10),
+        (L("消さない"), 0), (L("3秒で消す"), 3), (L("10秒で消す"), 10),
     ]
     var annotationOn: Bool {
         get { UserDefaults.standard.bool(forKey: "annotationOn") }
@@ -1238,7 +1253,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         AVCaptureDevice.requestAccess(for: .video) { ok in
             DispatchQueue.main.async {
                 if ok { self.refreshCameras(); self.startSession(); self.watchCamera(); self.refreshBackgrounds() }
-                else { self.showAlert("カメラへのアクセスが許可されていません。\nシステム設定 > プライバシーとセキュリティ > カメラ で許可してください。") }
+                else { self.showAlert(L("カメラへのアクセスが許可されていません。\nシステム設定 > プライバシーとセキュリティ > カメラ で許可してください。")) }
             }
         }
     }
@@ -1319,7 +1334,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         cameraPopup.action = #selector(cameraChanged)
 
         let quality = NSPopUpButton()
-        quality.addItems(withTitles: ["Fast (低負荷)", "Balanced", "Accurate (高品質)"])
+        quality.addItems(withTitles: [L("Fast (低負荷)"), "Balanced", L("Accurate (高品質)")])
         quality.selectItem(at: 1)
         quality.target = self
         quality.action = #selector(qualityChanged(_:))
@@ -1329,11 +1344,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         fpsPopup.selectItem(at: frameRates.firstIndex { $0.fps == targetFPS } ?? 1)
         fpsPopup.target = self
         fpsPopup.action = #selector(fpsChanged(_:))
-        fpsPopup.toolTip = "照明の電源周波数に合わせると、フリッカー (明滅) が出にくくなります"
+        fpsPopup.toolTip = L("照明の電源周波数に合わせると、フリッカー (明滅) が出にくくなります")
 
         let deflicker = NSSlider(value: settings.deflicker, minValue: 0, maxValue: 1,
                                  target: self, action: #selector(deflickerChanged(_:)))
-        deflicker.toolTip = "照明のフリッカーによる画面全体の明滅をならします (横じまは消せません)"
+        deflicker.toolTip = L("照明のフリッカーによる画面全体の明滅をならします (横じまは消せません)")
 
         let feather = NSSlider(value: settings.feather, minValue: 0, maxValue: 6,
                                target: self, action: #selector(featherChanged(_:)))
@@ -1343,35 +1358,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         settings.mirror = defaults.object(forKey: "mirror") as? Bool ?? true
         settings.flipVertical = defaults.object(forKey: "flipVertical") as? Bool ?? true
         settings.straightAlpha = defaults.bool(forKey: "straightAlpha")
-        let mirror = NSButton(checkboxWithTitle: "左右反転", target: self, action: #selector(mirrorChanged(_:)))
+        let mirror = NSButton(checkboxWithTitle: L("左右反転"), target: self, action: #selector(mirrorChanged(_:)))
         mirror.state = settings.mirror ? .on : .off
-        let flip = NSButton(checkboxWithTitle: "上下反転", target: self, action: #selector(flipChanged(_:)))
+        let flip = NSButton(checkboxWithTitle: L("上下反転"), target: self, action: #selector(flipChanged(_:)))
         flip.state = settings.flipVertical ? .on : .off
-        let straight = NSButton(checkboxWithTitle: "ストレートα", target: self, action: #selector(alphaChanged(_:)))
+        let straight = NSButton(checkboxWithTitle: L("ストレートα"), target: self, action: #selector(alphaChanged(_:)))
         straight.state = settings.straightAlpha ? .on : .off
-        straight.toolTip = "オフ: プリマルチプライドα (既定) / オン: ストレートα。受信側で縁が黒くなる・白くなる場合に切り替え"
+        straight.toolTip = L("オフ: プリマルチプライドα (既定) / オン: ストレートα。受信側で縁が黒くなる・白くなる場合に切り替え")
 
         let smoothing = NSSlider(value: settings.smoothing, minValue: 0, maxValue: 1,
                                  target: self, action: #selector(smoothingChanged(_:)))
-        smoothing.toolTip = "上げるほど輪郭のちらつきが減ります。上げすぎると動いたときに残像が出ます"
+        smoothing.toolTip = L("上げるほど輪郭のちらつきが減ります。上げすぎると動いたときに残像が出ます")
         let tighten = NSSlider(value: settings.tighten, minValue: 0, maxValue: 1,
                                target: self, action: #selector(tightenChanged(_:)))
-        tighten.toolTip = "上げるほど半透明の縁 (背景のにじみ) が減り、輪郭がくっきりします"
+        tighten.toolTip = L("上げるほど半透明の縁 (背景のにじみ) が減り、輪郭がくっきりします")
 
         let hold = NSSlider(value: settings.hold, minValue: 0, maxValue: 1,
                             target: self, action: #selector(holdChanged(_:)))
-        hold.toolTip = "上げるほど、手をかざしたときなどに体の一部が一瞬消える現象を抑えます。上げすぎると、移動した後に元の位置がうっすら残ります"
+        hold.toolTip = L("上げるほど、手をかざしたときなどに体の一部が一瞬消える現象を抑えます。上げすぎると、移動した後に元の位置がうっすら残ります")
 
         fpsLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
 
         // 3 段目: 画面に重ねる表示
         overlay = OverlayWindow(processor: processor)
-        overlayCheck = toolbarToggle("画面に表示", #selector(overlayToggled(_:)))
+        overlayCheck = toolbarToggle(L("画面に表示"), #selector(overlayToggled(_:)))
         overlayCheck.state = overlayOn ? .on : .off
-        overlayCheck.toolTip = "切り抜いた人物を、デスクトップの隅に常に手前で重ねます (クリックは後ろのアプリに届きます)"
-        personButton = toolbarToggle("人物", #selector(personToggled(_:)))
+        overlayCheck.toolTip = L("切り抜いた人物を、デスクトップの隅に常に手前で重ねます (クリックは後ろのアプリに届きます)")
+        personButton = toolbarToggle(L("人物"), #selector(personToggled(_:)))
         personButton.state = personOn ? .on : .off
-        personButton.toolTip = "人物を出し入れします (全画面出力・プレビュー・Syphon・画面に重ねる表示のすべて)。オフにすると背景だけになります。\(HotKeys.modifierSymbols)P"
+        personButton.toolTip = L("人物を出し入れします (全画面出力・プレビュー・Syphon・画面に重ねる表示のすべて)。オフにすると背景だけになります。%@P", HotKeys.modifierSymbols)
         let cornerPopup = NSPopUpButton()
         cornerPopup.addItems(withTitles: OverlayWindow.Corner.allCases.map(\.title))
         cornerPopup.selectItem(at: overlayCorner.rawValue)
@@ -1379,7 +1394,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         cornerPopup.action = #selector(cornerChanged(_:))
         let sizeSlider = NSSlider(value: overlayScale, minValue: 0.15, maxValue: 0.8,
                                   target: self, action: #selector(overlaySizeChanged(_:)))
-        sizeSlider.toolTip = "画面の幅に対する大きさ"
+        sizeSlider.toolTip = L("画面の幅に対する大きさ")
         screenPopup.target = self
         screenPopup.action = #selector(screenChanged(_:))
         refreshScreens()
@@ -1387,19 +1402,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
                                                object: nil, queue: .main) { [weak self] _ in
             self?.screensChanged()
         }
-        recordButton = ToggleButton(title: "● 録画開始", target: self, action: #selector(recordToggled))
+        recordButton = ToggleButton(title: L("● 録画開始"), target: self, action: #selector(recordToggled))
         recordButton.onColor = .systemRed
-        recordButton.toolTip = "「録画する画面」を録画して、ムービーフォルダに保存します (このウィンドウは映りません)。\(HotKeys.modifierSymbols)R でも開始・停止できます"
+        recordButton.toolTip = L("「録画する画面」を録画して、ムービーフォルダに保存します (このウィンドウは映りません)。%@R でも開始・停止できます", HotKeys.modifierSymbols)
         // 「録画開始」と「録画停止」で幅が変わらないよう、広いほうに合わせる
         var recordWidth: CGFloat = 0
-        for t in ["■ 録画停止", "● 録画開始"] {
+        for t in [L("■ 録画停止"), L("● 録画開始")] {
             recordButton.title = t
             recordWidth = max(recordWidth, recordButton.intrinsicContentSize.width)
         }
         recordButton.widthAnchor.constraint(equalToConstant: recordWidth).isActive = true
         micPopup.target = self
         micPopup.action = #selector(micChanged(_:))
-        micPopup.toolTip = "録画に入れるマイクの音声"
+        micPopup.toolTip = L("録画に入れるマイクの音声")
         // マイクの入力レベル (緑 → 黄 → 赤)。-60dB〜0dB を 0〜30 目盛りで表示
         micLevel.levelIndicatorStyle = .continuousCapacity
         micLevel.minValue = 0
@@ -1407,7 +1422,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         micLevel.warningValue = 24     // -12dB
         micLevel.criticalValue = 28    // -4dB
         micLevel.widthAnchor.constraint(equalToConstant: 70).isActive = true
-        micLevel.toolTip = "マイクの入力レベル。話したときに緑〜黄色まで振れればちょうどよい音量です"
+        micLevel.toolTip = L("マイクの入力レベル。話したときに緑〜黄色まで振れればちょうどよい音量です")
         let lt = Timer(timeInterval: 1.0 / 15, repeats: true) { [weak self] _ in
             guard let self else { return }
             // 録画中は録画側のマイクの音で、それ以外はメーター用に開いたマイクで測る
@@ -1463,7 +1478,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         recordLabel.lineBreakMode = .byClipping
         if #unavailable(macOS 12.3) {
             recordButton.isEnabled = false
-            recordButton.toolTip = "画面録画には macOS 12.3 以降が必要です"
+            recordButton.toolTip = L("画面録画には macOS 12.3 以降が必要です")
         }
         placeOverlay()
         updateOverlayVisibility()
@@ -1475,11 +1490,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         annotation.fadeAfter = fadeTimes[fadeIndex].seconds
         annotation.onChange = { [weak self] view in self?.annotationChanged(view) }
         annotation.coverAllScreens()
-        annotationCheck = toolbarToggle("手書き", #selector(annotationToggled(_:)))
+        annotationCheck = toolbarToggle(L("手書き"), #selector(annotationToggled(_:)))
         annotationCheck.state = annotationOn ? .on : .off
-        annotationCheck.toolTip = "選んだキーを押している間だけ、画面にペンで書けます。離すと後ろのアプリを操作できます"
-        penButton = toolbarToggle("ペン固定", #selector(penButtonClicked(_:)))
-        penButton.toolTip = "キーを押さなくても描ける状態にします。オンの間は後ろのアプリをクリックできません。\(HotKeys.modifierSymbols)D"
+        annotationCheck.toolTip = L("選んだキーを押している間だけ、画面にペンで書けます。離すと後ろのアプリを操作できます")
+        penButton = toolbarToggle(L("ペン固定"), #selector(penButtonClicked(_:)))
+        penButton.toolTip = L("キーを押さなくても描ける状態にします。オンの間は後ろのアプリをクリックできません。%@D", HotKeys.modifierSymbols)
         let keyPopup = NSPopUpButton()
         keyPopup.addItems(withTitles: drawKeys.map(\.title))
         keyPopup.selectItem(at: drawKeyIndex)
@@ -1497,17 +1512,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         fadePopup.selectItem(at: fadeIndex)
         fadePopup.target = self
         fadePopup.action = #selector(fadeChanged(_:))
-        let clearButton = NSButton(title: "消去", target: self, action: #selector(clearAnnotation))
+        let clearButton = NSButton(title: L("消去"), target: self, action: #selector(clearAnnotation))
         clearButton.controlSize = .large
-        clearButton.toolTip = "手書きを全部消します。\(HotKeys.modifierSymbols)C でも消せます"
+        clearButton.toolTip = L("手書きを全部消します。%@C でも消せます", HotKeys.modifierSymbols)
         setAnnotationVisible(annotationOn)
 
         // キーの説明用のキーボード
-        keyboardButton = toolbarToggle("キーボード", #selector(keyboardToggled(_:)))
+        keyboardButton = toolbarToggle(L("キーボード"), #selector(keyboardToggled(_:)))
         keyboardButton.state = keyboardOn ? .on : .off
-        keyboardButton.toolTip = "キーボード (JIS 配列・テンキー付き。Mac と Windows のキーの名前入り) の絵を出します。手書きで「このキー」と示すときに使います。\(HotKeys.modifierSymbols)B"
-        pointerButton = toolbarToggle("指し棒", #selector(pointerToggled(_:)))
-        pointerButton.toolTip = "マウスの位置を指し棒の矢印で指します (オンの間はマウスカーソルを隠します)。\(HotKeys.modifierSymbols)L"
+        keyboardButton.toolTip = L("キーボード (JIS / US 配列・テンキー付き。Mac と Windows のキーの名前入り) の絵を出します。手書きで「このキー」と示すときに使います。%@B", HotKeys.modifierSymbols)
+        pointerButton = toolbarToggle(L("指し棒"), #selector(pointerToggled(_:)))
+        pointerButton.toolTip = L("マウスの位置を指し棒の矢印で指します (オンの間はマウスカーソルを隠します)。%@L", HotKeys.modifierSymbols)
+        KeyboardRenderer.layout = keyboardLayout
+        let keyboardLayoutPopup = NSPopUpButton()
+        keyboardLayoutPopup.addItems(withTitles: KeyboardRenderer.Layout.allCases.map(\.title))
+        keyboardLayoutPopup.selectItem(at: keyboardLayout.rawValue)
+        keyboardLayoutPopup.target = self
+        keyboardLayoutPopup.action = #selector(keyboardLayoutChanged(_:))
         let keyboardPositionPopup = NSPopUpButton()
         keyboardPositionPopup.addItems(withTitles: KeyboardRenderer.Position.allCases.map(\.title))
         keyboardPositionPopup.selectItem(at: keyboardPosition.rawValue)
@@ -1520,20 +1541,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         // 5 段目: 背景映像と全画面出力
         bgPopup.target = self
         bgPopup.action = #selector(backgroundChanged(_:))
-        bgPopup.toolTip = "USB キャプチャーなどの映像を人物の後ろに敷きます"
-        outputCheck = toolbarToggle("全画面で出す", #selector(outputToggled(_:)))
-        outputCheck.toolTip = "合成した映像を、選んだ画面いっぱいに表示します。Esc か \(HotKeys.modifierSymbols)F で閉じます"
+        bgPopup.toolTip = L("USB キャプチャーなどの映像を人物の後ろに敷きます")
+        outputCheck = toolbarToggle(L("全画面で出す"), #selector(outputToggled(_:)))
+        outputCheck.toolTip = L("合成した映像を、選んだ画面いっぱいに表示します。Esc か %@F で閉じます", HotKeys.modifierSymbols)
         outputScreenPopup.target = self
         outputScreenPopup.action = #selector(outputScreenChanged(_:))
-        aspectPopup.addItems(withTitles: ["出す画面に合わせる", "カメラと同じ"])
+        aspectPopup.addItems(withTitles: [L("出す画面に合わせる"), L("カメラと同じ")])
         aspectPopup.selectItem(at: matchOutputAspect ? 0 : 1)
         aspectPopup.target = self
         aspectPopup.action = #selector(aspectChanged(_:))
-        aspectPopup.toolTip = "背景と人物を合成した映像の横縦比。「出す画面に合わせる」なら、プロジェクターや外部モニターに全画面で出したときに上下や左右が黒くなりません"
+        aspectPopup.toolTip = L("背景と人物を合成した映像の横縦比。「出す画面に合わせる」なら、プロジェクターや外部モニターに全画面で出したときに上下や左右が黒くなりません")
         updateCanvasAspect()
         recordScreenPopup.target = self
         recordScreenPopup.action = #selector(recordScreenChanged(_:))
-        recordScreenPopup.toolTip = "「● 録画開始」で録画する画面"
+        recordScreenPopup.toolTip = L("「● 録画開始」で録画する画面")
         refreshScreens()
 
         // 6 段目: 録画の設定 (数値で選ぶ)
@@ -1549,32 +1570,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         let rs = recordSettings
         let mbpsPopup = popup(RecordSettings.videoMbpsChoices.map { "\($0) Mbps" },
                               RecordSettings.videoMbpsChoices.firstIndex(of: rs.videoMbps) ?? 2,
-                              #selector(recordMbpsChanged(_:)), "映像の平均ビットレート。上げるほど文字や動きがきれいになり、ファイルが大きくなります")
-        let sizePopup = popup(RecordSettings.maxLongSideChoices.map { $0 > 0 ? "\($0)" : "縮めない" },
+                              #selector(recordMbpsChanged(_:)), L("映像の平均ビットレート。上げるほど文字や動きがきれいになり、ファイルが大きくなります"))
+        let sizePopup = popup(RecordSettings.maxLongSideChoices.map { $0 > 0 ? "\($0)" : L("縮めない") },
                               RecordSettings.maxLongSideChoices.firstIndex(of: rs.maxLongSide) ?? 1,
-                              #selector(recordSizeChanged(_:)), "録画の長辺のピクセル数 (画面のほうが小さいときは画面のまま)。1920 で 1080p 相当")
+                              #selector(recordSizeChanged(_:)), L("録画の長辺のピクセル数 (画面のほうが小さいときは画面のまま)。1920 で 1080p 相当"))
         let recFPSPopup = popup(RecordSettings.fpsChoices.map { "\($0) fps" },
                              RecordSettings.fpsChoices.firstIndex(of: rs.fps) ?? 2,
-                             #selector(recordFPSChanged(_:)), "最大フレームレート (画面が動かない間はコマ数が減ります)")
+                             #selector(recordFPSChanged(_:)), L("最大フレームレート (画面が動かない間はコマ数が減ります)"))
         let codecPopup = popup(["H.264", "HEVC (H.265)"], rs.hevc ? 1 : 0,
-                               #selector(recordCodecChanged(_:)), "同じ Mbps なら HEVC のほうが高画質 (ファイルの大きさは Mbps で決まります)。古い Mac や一部の編集ソフトでは開けないことがあります")
+                               #selector(recordCodecChanged(_:)), L("同じ Mbps なら HEVC のほうが高画質 (ファイルの大きさは Mbps で決まります)。古い Mac や一部の編集ソフトでは開けないことがあります"))
         let audioPopup = popup(RecordSettings.audioKbpsChoices.map { "\($0) kbps" },
                                RecordSettings.audioKbpsChoices.firstIndex(of: rs.audioKbps) ?? 2,
-                               #selector(recordAudioChanged(_:)), "音声 (AAC・48kHz・モノラル) のビットレート")
+                               #selector(recordAudioChanged(_:)), L("音声 (AAC・48kHz・モノラル) のビットレート"))
         recordSizeLabel.textColor = .secondaryLabelColor
         recordSizeLabel.font = .systemFont(ofSize: 11)
         updateRecordSizeLabel()
         helpButton = NSButton(title: "", target: self, action: #selector(showShortcuts(_:)))
         helpButton.bezelStyle = .helpButton
-        helpButton.toolTip = "ショートカットと使い方 (⌘/)"
+        helpButton.toolTip = L("ショートカットと使い方 (⌘/)")
 
         termsButton = NSButton(image: NSImage(systemSymbolName: "character.book.closed",
-                                              accessibilityDescription: "字幕の置き換え")!,
+                                              accessibilityDescription: L("字幕の置き換え"))!,
                                target: self, action: #selector(showTerms(_:)))
         termsButton.bezelStyle = .rounded
-        termsButton.toolTip = "字幕の置き換え (よく間違える言葉の直し方) を編集・保存・読み込みします"
-        subtitleButton = toolbarToggle("字幕", #selector(subtitleToggled(_:)))
-        subtitleButton.toolTip = "話した言葉を文字にして、映像の下に出します。認識は Mac の中で行います。\(HotKeys.modifierSymbols)S"
+        termsButton.toolTip = L("字幕の言語と置き換え (よく間違える言葉の直し方) を設定します")
+        subtitleButton = toolbarToggle(L("字幕"), #selector(subtitleToggled(_:)))
+        subtitleButton.toolTip = L("話した言葉を文字にして、映像の下に出します。認識は Mac の中で行います。%@S", HotKeys.modifierSymbols)
         subtitles.terms = subtitleTermList
         cachedReplacements = subtitleReplacements
         subtitles.onText = { [weak self] text in
@@ -1612,7 +1633,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         for v in [mirror, flip, straight] { mirrors.addView(v, in: .trailing) }
         mirrors.spacing = 14
         // ペンの色と線を消すまでの時間は 1 行に並べる
-        let penRow = NSStackView(views: [colorPopup, NSTextField(labelWithString: "線を消す"), fadePopup])
+        let penRow = NSStackView(views: [colorPopup, NSTextField(labelWithString: L("線を消す")), fadePopup])
         penRow.spacing = 6
         colorPopup.widthAnchor.constraint(equalToConstant: 62).isActive = true
         fadePopup.widthAnchor.constraint(equalToConstant: 106).isActive = true
@@ -1622,7 +1643,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         sizePopup.widthAnchor.constraint(equalToConstant: 112).isActive = true
         recFPSPopup.widthAnchor.constraint(equalToConstant: 112).isActive = true
         // 映像と音声のビットレートは 1 行に並べる
-        let rateRow = NSStackView(views: [mbpsPopup, NSTextField(labelWithString: "音声"), audioPopup])
+        let rateRow = NSStackView(views: [mbpsPopup, NSTextField(labelWithString: L("音声")), audioPopup])
         rateRow.spacing = 6
         mbpsPopup.widthAnchor.constraint(equalToConstant: 92).isActive = true
         audioPopup.widthAnchor.constraint(equalToConstant: 104).isActive = true
@@ -1635,55 +1656,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
             l.minValue = 0; l.maxValue = 30; l.warningValue = 24; l.criticalValue = 28
             l.widthAnchor.constraint(equalToConstant: 70).isActive = true
         }
-        extLevel.toolTip = "外部の音声の入力レベル"
+        extLevel.toolTip = L("外部の音声の入力レベル")
         extInPopup.target = self
         extInPopup.action = #selector(extInputChanged(_:))
-        extInPopup.toolTip = "キャプチャーボードやオーディオインターフェースなど、取り込む音声の機器。録画のときはマイクの音と混ぜて入ります"
+        extInPopup.toolTip = L("キャプチャーボードやオーディオインターフェースなど、取り込む音声の機器。録画のときはマイクの音と混ぜて入ります")
         extOutPopup.target = self
         extOutPopup.action = #selector(extOutputChanged(_:))
-        extOutPopup.toolTip = "取り込んだ音を、そのまま出すスピーカー"
+        extOutPopup.toolTip = L("取り込んだ音を、そのまま出すスピーカー")
         let extInRow = NSStackView(views: [extInPopup, extLevel])
         extInRow.spacing = 6
         extInPopup.widthAnchor.constraint(equalToConstant: sideControlWidth - 76).isActive = true
         let extVolSlider = NSSlider(value: Double(extVolume), minValue: 0, maxValue: 1,
                                     target: self, action: #selector(extVolumeChanged(_:)))
-        extVolSlider.toolTip = "外部の音の音量。スピーカーに出す音と、録画に入る音の両方が変わります"
+        extVolSlider.toolTip = L("外部の音の音量。スピーカーに出す音と、録画に入る音の両方が変わります")
         let duckPopup = NSPopUpButton()
         duckPopup.addItems(withTitles: Self.duckChoices.map(\.0))
         duckPopup.selectItem(at: Self.duckChoices.firstIndex { abs($0.1 - extDuck) < 0.001 } ?? 2)
         duckPopup.target = self
         duckPopup.action = #selector(extDuckChanged(_:))
-        duckPopup.toolTip = "マイクで話している間、録画に入る外部の音を自動で下げます (スピーカーに出す音は下げません)"
+        duckPopup.toolTip = L("マイクで話している間、録画に入る外部の音を自動で下げます (スピーカーに出す音は下げません)")
         refreshExtInputs()
         refreshExtOutputs()
         startExternal()
         let atemSection = buildATEM()
         let tuning = sideGrid([
-            ("ちらつき抑制", smoothing), ("消失の保持", hold), ("境界の締まり", tighten),
-            ("境界ぼかし", feather), ("明るさ安定化", deflicker),
+            (L("ちらつき抑制"), smoothing), (L("消失の保持"), hold), (L("境界の締まり"), tighten),
+            (L("境界ぼかし"), feather), (L("明るさ安定化"), deflicker),
         ])
         tuning.isHidden = !tuningOpen
-        let cameraGrid = sideGrid([("カメラ", cameraPopup), ("品質", quality), ("フレームレート", fpsPopup)])
+        let cameraGrid = sideGrid([(L("カメラ"), cameraPopup), (L("品質"), quality), (L("フレームレート"), fpsPopup)])
         let sections: [NSView] = [
-            sectionHeader("カメラ"),
+            sectionHeader(L("カメラ")),
             cameraGrid,
             mirrors,
-            collapsibleSection("切り抜きの調整", content: tuning),
-            sectionHeader("人物の位置と大きさ"),
-            sideGrid([("位置", cornerPopup), ("大きさ", sizeSlider), ("表示する画面", screenPopup)]),
-            sectionHeader("背景と全画面出力"),
-            sideGrid([("背景映像", bgPopup), ("出す画面", outputScreenPopup), ("映像の比率", aspectPopup)]),
-            sectionHeader("手書き"),
-            sideGrid([("描くキー", keyPopup), ("色", penRow), ("太さ", widthSlider)]),
-            sectionHeader("キーボード"),
-            sideGrid([("位置", keyboardPositionPopup), ("大きさ", keyboardSizeSlider)]),
-            sectionHeader("録画"),
-            sideGrid([("録画する画面", recordScreenPopup), ("マイク", micRow), ("映像", rateRow),
-                      ("長辺", sizeRow), ("形式", codecPopup), ("", recordSizeLabel)]),
-            sectionHeader("外部の音声"),
-            sideGrid([("入力", extInRow), ("スピーカー", extOutPopup), ("音量", extVolSlider),
-                      ("声で下げる", duckPopup)]),
-            sectionHeader("ATEM スイッチャー"),
+            collapsibleSection(L("切り抜きの調整"), content: tuning),
+            sectionHeader(L("人物の位置と大きさ")),
+            sideGrid([(L("位置"), cornerPopup), (L("大きさ"), sizeSlider), (L("表示する画面"), screenPopup)]),
+            sectionHeader(L("背景と全画面出力")),
+            sideGrid([(L("背景映像"), bgPopup), (L("出す画面"), outputScreenPopup), (L("映像の比率"), aspectPopup)]),
+            sectionHeader(L("手書き")),
+            sideGrid([(L("描くキー"), keyPopup), (L("色"), penRow), (L("太さ"), widthSlider)]),
+            sectionHeader(L("キーボード")),
+            sideGrid([(L("配列"), keyboardLayoutPopup), (L("位置"), keyboardPositionPopup), (L("大きさ"), keyboardSizeSlider)]),
+            sectionHeader(L("録画")),
+            sideGrid([(L("録画する画面"), recordScreenPopup), (L("マイク"), micRow), (L("映像"), rateRow),
+                      (L("長辺"), sizeRow), (L("形式"), codecPopup), ("", recordSizeLabel)]),
+            sectionHeader(L("外部の音声")),
+            sideGrid([(L("入力"), extInRow), (L("スピーカー"), extOutPopup), (L("音量"), extVolSlider),
+                      (L("声で下げる"), duckPopup)]),
+            sectionHeader(L("ATEM スイッチャー")),
         ] + atemSection
         let side = NSStackView(views: sections)
         side.orientation = .vertical
@@ -1883,7 +1904,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     }
 
     func startSession() {
-        guard !devices.isEmpty else { showAlert("カメラが見つかりません"); return }
+        guard !devices.isEmpty else { showAlert(L("カメラが見つかりません")); return }
         configure(device: devices[0])
         let output = AVCaptureVideoDataOutput()
         output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
@@ -1912,7 +1933,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
             watchFrameRate(of: device)
             if !session.canSetSessionPreset(.hd1920x1080) { session.sessionPreset = .high }
         } catch {
-            showAlert("カメラを開けません: \(error.localizedDescription)")
+            showAlert(L("カメラを開けません: %@", error.localizedDescription))
         }
         session.commitConfiguration()
         applyFrameRate()
@@ -2013,7 +2034,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         outputScreenPopup.addItems(withTitles: NSScreen.screens.map(\.localizedName))
         outputScreenPopup.selectItem(withTitle: outputScreen.localizedName)
         recordScreenPopup.removeAllItems()
-        recordScreenPopup.addItem(withTitle: "表示する画面と同じ")
+        recordScreenPopup.addItem(withTitle: L("表示する画面と同じ"))
         recordScreenPopup.addItems(withTitles: NSScreen.screens.map(\.localizedName))
         if let name = recordScreenName, NSScreen.screens.contains(where: { $0.localizedName == name }) {
             recordScreenPopup.selectItem(withTitle: name)
@@ -2039,11 +2060,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         bgDevices = AVCaptureDevice.DiscoverySession(deviceTypes: types, mediaType: .video,
                                                      position: .unspecified).devices
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "なし（透明）", action: nil, keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: L("なし（透明）"), action: nil, keyEquivalent: ""))
         if #available(macOS 12.3, *) {
             menu.addItem(.separator())
             for screen in NSScreen.screens {
-                let item = NSMenuItem(title: "画面: \(screen.localizedName)", action: nil, keyEquivalent: "")
+                let item = NSMenuItem(title: L("画面: %@", screen.localizedName), action: nil, keyEquivalent: "")
                 item.representedObject = "screen:" + screen.localizedName
                 menu.addItem(item)
             }
@@ -2070,7 +2091,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
             // 手書きの線は背景にも映す (全画面出力に手書きが入るように)
             let keep = annotation?.windows.map(\.windowNumber) ?? []
             processor.background.startScreen(screen, keepWindows: keep) { [weak self] msg in
-                self?.showAlert("画面を背景にできません: \(msg)\n\n初回は「システム設定 > プライバシーとセキュリティ > 画面収録」で NoGreenBack を許可し、アプリを開き直してください。")
+                self?.showAlert(L("画面を背景にできません: %@\n\n初回は「システム設定 > プライバシーとセキュリティ > 画面収録」で NoGreenBack を許可し、アプリを開き直してください。", msg))
                 self?.bgPopup.selectItem(at: 0)
                 try? self?.processor.background.start(nil)
             }
@@ -2080,7 +2101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         do {
             try processor.background.start(device, force: reopenDevice)
         } catch {
-            showAlert("背景映像を開けません: \(error.localizedDescription)")
+            showAlert(L("背景映像を開けません: %@", error.localizedDescription))
             bgPopup.selectItem(at: 0)
             try? processor.background.start(nil)
         }
@@ -2309,6 +2330,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         keyboardButton.state = keyboardOn ? .off : .on
         keyboardToggled(keyboardButton)
     }
+    @objc func keyboardLayoutChanged(_ sender: NSPopUpButton) {
+        keyboardLayout = .init(rawValue: sender.indexOfSelectedItem) ?? .jis
+        KeyboardRenderer.layout = keyboardLayout
+        updateKeyboard()
+    }
     @objc func keyboardPositionChanged(_ sender: NSPopUpButton) {
         keyboardPosition = .init(rawValue: sender.indexOfSelectedItem) ?? .auto
         updateKeyboard()
@@ -2332,15 +2358,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     /// (キー, キーコード, 内容, 動作)
     var hotKeyList: [(key: String, code: Int, title: String, action: () -> Void)] {
         [
-            ("R", kVK_ANSI_R, "録画の開始・停止", { [weak self] in self?.recordToggled() }),
-            ("P", kVK_ANSI_P, "人物の表示・非表示", { [weak self] in self?.togglePerson() }),
-            ("C", kVK_ANSI_C, "手書きを全部消す", { [weak self] in self?.annotation.clear() }),
-            ("D", kVK_ANSI_D, "ペン (描画モード) のオン・オフ", { [weak self] in self?.togglePen() }),
-            ("K", kVK_ANSI_K, "ペンの色を次の色へ", { [weak self] in self?.nextPenColor() }),
-            ("F", kVK_ANSI_F, "全画面出力の表示・非表示", { [weak self] in self?.toggleOutput() }),
-            ("S", kVK_ANSI_S, "字幕のオン・オフ", { [weak self] in self?.toggleSubtitles() }),
-            ("B", kVK_ANSI_B, "キーボードの表示・非表示", { [weak self] in self?.toggleKeyboard() }),
-            ("L", kVK_ANSI_L, "指し棒のオン・オフ", { [weak self] in self?.togglePointer() }),
+            ("R", kVK_ANSI_R, L("録画の開始・停止"), { [weak self] in self?.recordToggled() }),
+            ("P", kVK_ANSI_P, L("人物の表示・非表示"), { [weak self] in self?.togglePerson() }),
+            ("C", kVK_ANSI_C, L("手書きを全部消す"), { [weak self] in self?.annotation.clear() }),
+            ("D", kVK_ANSI_D, L("ペン (描画モード) のオン・オフ"), { [weak self] in self?.togglePen() }),
+            ("K", kVK_ANSI_K, L("ペンの色を次の色へ"), { [weak self] in self?.nextPenColor() }),
+            ("F", kVK_ANSI_F, L("全画面出力の表示・非表示"), { [weak self] in self?.toggleOutput() }),
+            ("S", kVK_ANSI_S, L("字幕のオン・オフ"), { [weak self] in self?.toggleSubtitles() }),
+            ("B", kVK_ANSI_B, L("キーボードの表示・非表示"), { [weak self] in self?.toggleKeyboard() }),
+            ("L", kVK_ANSI_L, L("指し棒のオン・オフ"), { [weak self] in self?.togglePointer() }),
         ]
     }
 
@@ -2348,12 +2374,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         let keys = HotKeys()
         var failed: [String] = []
         for k in hotKeyList where !keys.register(keyCode: k.code, k.action) {
-            failed.append("\(HotKeys.modifierSymbols)\(k.key)（\(k.title)）")
+            failed.append(L("%@（%@）", "\(HotKeys.modifierSymbols)\(k.key)", k.title))
             failedHotKeys.insert(k.key)
         }
         hotKeys = keys
         if !failed.isEmpty {
-            showAlert("次のショートカットは他のアプリが使っているため登録できませんでした:\n" + failed.joined(separator: "\n"))
+            showAlert(L("次のショートカットは他のアプリが使っているため登録できませんでした:\n") + failed.joined(separator: "\n"))
         }
     }
 
@@ -2381,10 +2407,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         for k in hotKeyList {
             let used = failedHotKeys.contains(k.key)
             rows.append([cell("\(HotKeys.modifierSymbols) \(k.key)", bold: true, dim: used),
-                         cell(k.title + (used ? "（他のアプリが使用中のため使えません）" : ""), dim: used)])
+                         cell(k.title + (used ? L("（他のアプリが使用中のため使えません）") : ""), dim: used)])
         }
         let drawKey = drawKeys[drawKeyIndex].title.components(separatedBy: " ").first ?? ""
-        let note = NSTextField(wrappingLabelWithString: "上の 6 つは、他のアプリを操作中でも効きます。Stream Deck では「ホットキー」アクションにこの組み合わせを設定します。")
+        let note = NSTextField(wrappingLabelWithString: L("上のショートカットは、他のアプリを操作中でも効きます。Stream Deck では「ホットキー」アクションにこの組み合わせを設定します。"))
         note.font = .systemFont(ofSize: 11)
         note.textColor = .secondaryLabelColor
         note.preferredMaxLayoutWidth = 400
@@ -2395,14 +2421,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
             r.mergeCells(in: NSRange(location: 0, length: 2))
             r.topPadding = space
         }
-        addMerged(header("どこからでも使えるショートカット"), space: 0)
+        addMerged(header(L("どこからでも使えるショートカット")), space: 0)
         rows.forEach { grid.addRow(with: $0) }
-        addMerged(header("NoGreenBack の操作"), space: 12)
-        for r in [[cell("\(drawKey) を押しながら", bold: true), cell("ドラッグで描く（手書きがオンのとき）")],
-                  [cell("\(drawKey) を 2 回", bold: true), cell("手書きを全部消す")],
-                  [cell("\(drawKey) ＋ 右クリック", bold: true), cell("手書きを全部消す")],
-                  [cell("Esc", bold: true), cell("全画面出力を閉じる（全画面出力を操作中のとき）")],
-                  [cell("⌘ Q", bold: true), cell("終了")]] { grid.addRow(with: r) }
+        addMerged(header(L("NoGreenBack の操作")), space: 12)
+        for r in [[cell(L("%@ を押しながら", drawKey), bold: true), cell(L("ドラッグで描く（手書きがオンのとき）"))],
+                  [cell(L("%@ を 2 回", drawKey), bold: true), cell(L("手書きを全部消す"))],
+                  [cell(L("%@ ＋ 右クリック", drawKey), bold: true), cell(L("手書きを全部消す"))],
+                  [cell("Esc", bold: true), cell(L("全画面出力を閉じる（全画面出力を操作中のとき）"))],
+                  [cell("⌘ Q", bold: true), cell(L("終了"))]] { grid.addRow(with: r) }
         addMerged(note, space: 12)
         func explain(_ text: String) -> NSTextField {
             let t = NSTextField(wrappingLabelWithString: text)
@@ -2410,12 +2436,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
             t.preferredMaxLayoutWidth = 400
             return t
         }
-        addMerged(header("外部の音声"), space: 16)
-        addMerged(explain("取り込んだ音をスピーカーに出し、録画ではマイクと混ぜて 1 本の音声にします。話している間は録画の外部の音を自動で下げます。「音量」はスピーカーと録画の両方に効きます。"), space: 0)
-        addMerged(header("ATEM スイッチャー"), space: 16)
+        addMerged(header(L("外部の音声")), space: 16)
+        addMerged(explain(L("取り込んだ音をスピーカーに出し、録画ではマイクと混ぜて 1 本の音声にします。話している間は録画の外部の音を自動で下げます。「音量」はスピーカーと録画の両方に効きます。")), space: 0)
+        addMerged(header(L("ATEM スイッチャー")), space: 16)
         addMerged(explain(ATEMControl.sdkAvailable
-            ? "USB でつないでいるなら「アドレス」を空欄のまま、LAN なら ATEM の IP アドレスを入れて「つなぐ」を押します。つながると、上部に入力のボタンが出ます。押した入力が本番に出ます。"
-            : "ATEM を LAN ケーブルで同じネットワークにつなぎ、IP アドレスを入れて「つなぐ」を押します (USB で操作するには ATEM のソフトを入れてください)。つながると、上部に入力のボタンが出ます。押した入力が本番に出ます。"), space: 0)
+            ? L("USB でつないでいるなら「アドレス」を空欄のまま、LAN なら ATEM の IP アドレスを入れて「つなぐ」を押します。つながると、上部に入力のボタンが出ます。押した入力が本番に出ます。")
+            : L("ATEM を LAN ケーブルで同じネットワークにつなぎ、IP アドレスを入れて「つなぐ」を押します (USB で操作するには ATEM のソフトを入れてください)。つながると、上部に入力のボタンが出ます。押した入力が本番に出ます。")), space: 0)
         grid.rowSpacing = 6
         grid.columnSpacing = 20
         grid.translatesAutoresizingMaskIntoConstraints = false
@@ -2471,7 +2497,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         else { types = [.builtInMicrophone, .externalUnknown] }
         micDevices = AVCaptureDevice.DiscoverySession(deviceTypes: types, mediaType: .audio, position: .unspecified).devices
         micPopup.removeAllItems()
-        micPopup.addItem(withTitle: "なし")
+        micPopup.addItem(withTitle: L("なし"))
         micPopup.addItem(withTitle: systemMicTitle)
         micPopup.addItems(withTitles: micDevices.map(\.localizedName))
         if !recordMic {
@@ -2489,13 +2515,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
 
     func buildATEM() -> [NSView] {
         atemHostField.stringValue = atemHost
-        atemHostField.placeholderString = ATEMControl.sdkAvailable ? "空欄なら USB" : "192.168.10.240"
+        atemHostField.placeholderString = ATEMControl.sdkAvailable ? L("空欄なら USB") : "192.168.10.240"
         atemHostField.toolTip = ATEMControl.sdkAvailable
-            ? "USB でつなぐなら空欄のまま。LAN でつなぐなら ATEM の IP アドレス (ATEM Software Control の「設定」で確認できます)"
-            : "ATEM の IP アドレス (ATEM Software Control の「設定」で確認できます)"
+            ? L("USB でつなぐなら空欄のまま。LAN でつなぐなら ATEM の IP アドレス (ATEM Software Control の「設定」で確認できます)")
+            : L("ATEM の IP アドレス (ATEM Software Control の「設定」で確認できます)")
         atemHostField.widthAnchor.constraint(equalToConstant: sideControlWidth - 76).isActive = true
         atemConnectButton.bezelStyle = .rounded
-        atemConnectButton.title = "つなぐ"
+        atemConnectButton.title = L("つなぐ")
         atemConnectButton.target = self
         atemConnectButton.action = #selector(atemConnectClicked)
         atemConnectButton.widthAnchor.constraint(equalToConstant: 70).isActive = true
@@ -2506,20 +2532,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         atemInputs.trackingMode = .selectOne
         atemInputs.target = self
         atemInputs.action = #selector(atemInputClicked(_:))
-        atemInputs.toolTip = "押した入力を本番 (PGM) に出します"
+        atemInputs.toolTip = L("押した入力を本番 (PGM) に出します")
         setATEMInputs(atemInputIDs.map { ATEMControl.Input(id: $0, name: "\($0)") })
         atemInputs.isEnabled = false
         atemMixCheck.state = UserDefaults.standard.bool(forKey: "atemMix") ? .on : .off
         atemMixCheck.target = self
         atemMixCheck.action = #selector(atemMixChanged(_:))
-        atemMixCheck.toolTip = "オンにすると、ATEM で設定している切り替え効果 (ミックスなど) で移ります。ミックスは 0.5 秒。オフならすぐ切り替えます (カット)"
+        atemMixCheck.toolTip = L("オンにすると、ATEM で設定している切り替え効果 (ミックスなど) で移ります。ミックスは 0.5 秒。オフならすぐ切り替えます (カット)")
 
         atem.onState = { [weak self] state, detail in
             guard let self else { return }
             switch state {
-            case .connected: self.atemStatus.stringValue = "つながりました" + (detail.map { "（\($0)）" } ?? "")
-            case .connecting: self.atemStatus.stringValue = detail ?? "つないでいます…"
-            case .disconnected: self.atemStatus.stringValue = "つないでいません"
+            case .connected: self.atemStatus.stringValue = (detail.map { L("つながりました（%@）", $0) } ?? L("つながりました"))
+            case .connecting: self.atemStatus.stringValue = detail ?? L("つないでいます…")
+            case .disconnected: self.atemStatus.stringValue = L("つないでいません")
             }
             self.atemInputs.isEnabled = state == .connected
         }
@@ -2533,7 +2559,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
             self.showATEMProgram()
         }
         if atemAutoConnect { setATEMConnected(true) }
-        return [sideGrid([("アドレス", hostRow), ("", atemStatus)])]
+        return [sideGrid([(L("アドレス"), hostRow), ("", atemStatus)])]
     }
 
     func setATEMInputs(_ list: [ATEMControl.Input]) {
@@ -2559,7 +2585,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     func setATEMConnected(_ on: Bool) {
         atemConnected = on
         atemAutoConnect = on
-        atemConnectButton.title = on ? "切る" : "つなぐ"
+        atemConnectButton.title = on ? L("切る") : L("つなぐ")
         atemToolbarGroup.isHidden = !on
         atemHostField.isEnabled = !on
         if on {
@@ -2594,7 +2620,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
 
     func refreshExtInputs() {
         extInPopup.removeAllItems()
-        extInPopup.addItem(withTitle: "使わない")
+        extInPopup.addItem(withTitle: L("使わない"))
         extInPopup.addItems(withTitles: micDevices.map(\.localizedName))
         if let id = extInputID, let i = micDevices.firstIndex(where: { $0.uniqueID == id }) {
             extInPopup.selectItem(at: i + 1)
@@ -2610,8 +2636,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         if list.map(\.uid) == extOutputs.map(\.uid), extOutPopup.numberOfItems > 0 { return }
         extOutputs = list
         extOutPopup.removeAllItems()
-        extOutPopup.addItem(withTitle: "出さない")
-        extOutPopup.addItem(withTitle: "システムの出力")
+        extOutPopup.addItem(withTitle: L("出さない"))
+        extOutPopup.addItem(withTitle: L("システムの出力"))
         extOutPopup.addItems(withTitles: list.map(\.name))
         switch extOutputUID {
         case nil: extOutPopup.selectItem(at: 0)
@@ -2667,7 +2693,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
 
     /// 「システムの設定に合わせる」の表示 (今使われるマイクの名前を添える)
     var systemMicTitle: String {
-        "システムの設定（\(AVCaptureDevice.default(for: .audio)?.localizedName ?? "なし")）"
+        L("システムの設定（%@）", AVCaptureDevice.default(for: .audio)?.localizedName ?? L("なし"))
     }
 
     /// システムの入力 (サウンド設定) が変わっていたら、表示とメーターを合わせる
@@ -2706,7 +2732,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         if let rec = recorder as? ScreenRecorder {
             // 停止 (MP4 への詰め替えが終わるまで「保存中」と出す)
             recordTimer?.invalidate()
-            recordLabel.stringValue = "保存中…"
+            recordLabel.stringValue = L("保存中…")
             recordingPanel?.orderOut(nil)
             recordingPanel = nil
             // ここまでに確定した字幕を、録画と同じ名前の .srt にする
@@ -2726,7 +2752,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
                 self.startMeter()
                 self.recordTimer?.invalidate()
                 self.recordLabel.stringValue = ""
-                self.recordButton.title = "● 録画開始"
+                self.recordButton.title = L("● 録画開始")
                 self.recordButton.state = .off
                 self.recordButton.isEnabled = true
                 if let url, !cues.isEmpty {
@@ -2734,9 +2760,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
                     try? SubtitleFile.srt(cues).write(to: srt, atomically: true, encoding: .utf8)
                 }
                 if let url { NSWorkspace.shared.activateFileViewerSelecting([url]) }
-                else { self.showAlert("画面に変化がなかったため、録画は保存されませんでした。") }
+                else { self.showAlert(L("画面に変化がなかったため、録画は保存されませんでした。")) }
                 if url != nil, rec.recordsAudio, rec.audioSamplesWritten == 0 {
-                    self.showAlert("マイクの音が届いていなかったため、録画には音が入っていません。\n「マイク」の選択と、右のメーターが動くかを確かめてください。")
+                    self.showAlert(L("マイクの音が届いていなかったため、録画には音が入っていません。\n「マイク」の選択と、右のメーターが動くかを確かめてください。"))
                 }
             }
         } else {
@@ -2767,7 +2793,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
                     self.recorder = rec
                     // 録画中はメーター用にマイクを開かない (Bluetooth マイクは 2 か所から開くと途切れる)
                     self.micMeter.stop()
-                    self.recordButton.title = "■ 録画停止"
+                    self.recordButton.title = L("■ 録画停止")
                     self.recordButton.state = .on
                     if hideWindow {
                         self.windowHiddenForRecording = true
@@ -2791,7 +2817,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
                 } catch {
                     self.recordingPanel?.orderOut(nil)
                     self.recordingPanel = nil
-                    self.showAlert("録画を開始できません: \(error.localizedDescription)\n\n初回は「システム設定 > プライバシーとセキュリティ > 画面収録」で NoGreenBack を許可し、アプリを開き直してください。")
+                    self.showAlert(L("録画を開始できません: %@\n\n初回は「システム設定 > プライバシーとセキュリティ > 画面収録」で NoGreenBack を許可し、アプリを開き直してください。", error.localizedDescription))
                 }
                 self.recordButton.isEnabled = true
             }
@@ -2866,6 +2892,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
 
     @objc func subtitleToggled(_ sender: NSButton) {
         if sender.state == .on {
+            subtitles.localeID = subtitleLanguage
             subtitles.start(microphone: selectedMic)
         } else {
             subtitles.stop()
@@ -2905,7 +2932,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     }
 
     func makeTermsPopover() -> NSPopover {
-        let title = NSTextField(labelWithString: "字幕の置き換え")
+        // 認識する言語
+        let languagePopup = NSPopUpButton()
+        languagePopup.addItems(withTitles: Self.subtitleLanguages.map(\.title))
+        languagePopup.selectItem(at: Self.subtitleLanguages.firstIndex { $0.id == subtitleLanguage } ?? 0)
+        languagePopup.target = self
+        languagePopup.action = #selector(subtitleLanguageChanged(_:))
+        let languageRow = NSStackView(views: [NSTextField(labelWithString: L("認識する言語")), languagePopup])
+        languageRow.spacing = 8
+        let title = NSTextField(labelWithString: L("字幕の置き換え"))
         title.font = .boldSystemFont(ofSize: 13)
         // よく間違える言葉を「間違い → 正しい」と 1 行ずつ書く
         termsView.font = .systemFont(ofSize: 13)
@@ -2924,16 +2959,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         termsBox.borderType = .bezelBorder
         termsBox.widthAnchor.constraint(equalToConstant: 420).isActive = true
         termsBox.heightAnchor.constraint(equalToConstant: 240).isActive = true
-        let hint = NSTextField(wrappingLabelWithString: "よく間違える言葉を「間違い → 正しい」と 1 行ずつ書くと、字幕と字幕ファイルで置き換えます (例: ジオメトリー濃度 → ジオメトリーノード、ブレンダー → Blender)。→ は -> や = でも書けます。書いた内容は自動で残ります。ほかの Mac や別の話題用に、ファイルに保存・読み込みもできます")
+        let hint = NSTextField(wrappingLabelWithString: L("よく間違える言葉を「間違い → 正しい」と 1 行ずつ書くと、字幕と字幕ファイルで置き換えます (例: ジオメトリー濃度 → ジオメトリーノード、ブレンダー → Blender)。→ は -> や = でも書けます。書いた内容は自動で残ります。ほかの Mac や別の話題用に、ファイルに保存・読み込みもできます"))
         hint.font = .systemFont(ofSize: 11)
         hint.textColor = .secondaryLabelColor
         hint.preferredMaxLayoutWidth = 420
         termsCountLabel.font = .systemFont(ofSize: 11, weight: .medium)
-        let load = NSButton(title: "読み込む…", target: self, action: #selector(loadTerms))
-        let save = NSButton(title: "保存…", target: self, action: #selector(saveTerms))
+        let load = NSButton(title: L("読み込む…"), target: self, action: #selector(loadTerms))
+        let save = NSButton(title: L("保存…"), target: self, action: #selector(saveTerms))
         let buttons = NSStackView(views: [termsCountLabel, NSView(), load, save])
         buttons.spacing = 8
-        let stack = NSStackView(views: [title, termsBox, buttons, hint])
+        let stack = NSStackView(views: [languageRow, title, termsBox, buttons, hint])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
@@ -2949,6 +2984,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         return p
     }
 
+    /// 認識する言語を変えたら、字幕を出している途中ならその言語でやり直す
+    @objc func subtitleLanguageChanged(_ sender: NSPopUpButton) {
+        guard Self.subtitleLanguages.indices.contains(sender.indexOfSelectedItem) else { return }
+        subtitleLanguage = Self.subtitleLanguages[sender.indexOfSelectedItem].id
+        if subtitleButton.state == .on {
+            subtitles.localeID = subtitleLanguage
+            subtitles.start(microphone: selectedMic)
+        }
+    }
+
     /// 欄の内容をすぐ保存して、認識と置き換えに使う
     func applyTerms(_ text: String) {
         termsSaveTimer?.invalidate()
@@ -2962,15 +3007,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         applyTerms(termsView.string)
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.plainText]
-        panel.nameFieldStringValue = "字幕の置き換え.txt"
-        panel.message = "字幕の置き換えをファイルに保存します"
+        panel.nameFieldStringValue = L("字幕の置き換え.txt")
+        panel.message = L("字幕の置き換えをファイルに保存します")
         termsPopover?.behavior = .applicationDefined
         defer { termsPopover?.behavior = .transient }
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             try termsView.string.write(to: url, atomically: true, encoding: .utf8)
         } catch {
-            showAlert("保存できません: \(error.localizedDescription)")
+            showAlert(L("保存できません: %@", error.localizedDescription))
         }
     }
 
@@ -2978,7 +3023,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.plainText, .text]
         panel.allowsMultipleSelection = false
-        panel.message = "字幕の置き換えのファイルを選びます (今の内容と入れ替わります)"
+        panel.message = L("字幕の置き換えのファイルを選びます (今の内容と入れ替わります)")
         termsPopover?.behavior = .applicationDefined
         defer { termsPopover?.behavior = .transient }
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -2988,14 +3033,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
             termsView.string = text
             applyTerms(text)
         } catch {
-            showAlert("読み込めません: \(error.localizedDescription)")
+            showAlert(L("読み込めません: %@", error.localizedDescription))
         }
     }
 
     /// 字幕に使っている置き換えの数を出す
     func updateTermsCount() {
         let n = subtitleReplacements.count
-        termsCountLabel.stringValue = n == 0 ? "置き換えは登録されていません" : "✓ \(n) 件の置き換えを字幕に使っています"
+        termsCountLabel.stringValue = n == 0 ? L("置き換えは登録されていません") : L("✓ %d 件の置き換えを字幕に使っています", n)
         termsCountLabel.textColor = n == 0 ? .secondaryLabelColor : .systemGreen
     }
 
@@ -3099,12 +3144,12 @@ let mainMenu = NSMenu()
 let appItem = NSMenuItem()
 mainMenu.addItem(appItem)
 let appMenu = NSMenu()
-appMenu.addItem(withTitle: "NoGreenBack を終了", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+appMenu.addItem(withTitle: L("NoGreenBack を終了"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 appItem.submenu = appMenu
 let helpItem = NSMenuItem()
 mainMenu.addItem(helpItem)
-let helpMenu = NSMenu(title: "ヘルプ")
-let shortcutItem = helpMenu.addItem(withTitle: "ショートカットの一覧", action: #selector(AppDelegate.showShortcuts(_:)), keyEquivalent: "/")
+let helpMenu = NSMenu(title: L("ヘルプ"))
+let shortcutItem = helpMenu.addItem(withTitle: L("ショートカットの一覧"), action: #selector(AppDelegate.showShortcuts(_:)), keyEquivalent: "/")
 shortcutItem.target = delegate
 helpItem.submenu = helpMenu
 app.mainMenu = mainMenu

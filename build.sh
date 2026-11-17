@@ -56,11 +56,15 @@ cp -R "$FW_BUILD/Syphon.framework" "$APP/Contents/Frameworks/"
 cp Icons/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 # ライセンス (Syphon の BSD ライセンスは、バイナリで配るときに著作権表示を同梱するよう求めている)
 cp LICENSE THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/"
+# 画面の文字の英語の訳 (日本語はソースの文をそのまま使う)
+cp -R Resources/*.lproj "$APP/Contents/Resources/"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>CFBundleName</key><string>NoGreenBack</string>
+  <key>CFBundleDevelopmentRegion</key><string>ja</string>
+  <key>CFBundleLocalizations</key><array><string>ja</string><string>en</string></array>
   <key>CFBundleIdentifier</key><string>local.nogreenback</string>
   <key>CFBundleExecutable</key><string>NoGreenBack</string>
   <key>CFBundlePackageType</key><string>APPL</string>

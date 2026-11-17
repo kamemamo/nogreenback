@@ -153,7 +153,7 @@ final class ScreenFeed: NSObject, SCStreamOutput, SCStreamDelegate {
         let displayID = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
         guard let display = content.displays.first(where: { $0.displayID == displayID }) else {
             throw NSError(domain: "NoGreenBack", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "背景にする画面が見つかりません"])
+                          userInfo: [NSLocalizedDescriptionKey: L("背景にする画面が見つかりません")])
         }
         // 自分のウィンドウを映すと、合わせ鏡のように映像が繰り返されるので外す
         let me = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }

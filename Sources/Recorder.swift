@@ -77,7 +77,7 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         let displayID = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
         guard let display = content.displays.first(where: { $0.displayID == displayID }) ?? content.displays.first else {
-            throw RecorderError.message("録画する画面が見つかりません")
+            throw RecorderError.message(L("録画する画面が見つかりません"))
         }
         self.display = display
         let filter = Self.filter(content: content, display: display, keeping: windowNumbers)
@@ -124,7 +124,7 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
         var audioSession: AVCaptureSession?
         if microphone != nil || external != nil {
             guard await AVCaptureDevice.requestAccess(for: .audio) else {
-                throw RecorderError.message("マイクへのアクセスが許可されていません。\nシステム設定 > プライバシーとセキュリティ > マイク で許可してください。")
+                throw RecorderError.message(L("マイクへのアクセスが許可されていません。\nシステム設定 > プライバシーとセキュリティ > マイク で許可してください。"))
             }
             do {
                 let audio = AVAssetWriterInput(mediaType: .audio, outputSettings: [
@@ -163,7 +163,7 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
         }
 
         guard writer.startWriting() else {
-            throw RecorderError.message("録画ファイルを作れません: \(writer.error?.localizedDescription ?? "")")
+            throw RecorderError.message(L("録画ファイルを作れません: %@", writer.error?.localizedDescription ?? ""))
         }
         self.writer = writer
         self.videoInput = video
@@ -297,7 +297,7 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         let msg = error.localizedDescription
-        DispatchQueue.main.async { self.onError?("録画が止まりました: \(msg)") }
+        DispatchQueue.main.async { self.onError?(L("録画が止まりました: %@", msg)) }
     }
 
     // MARK: マイクの音声

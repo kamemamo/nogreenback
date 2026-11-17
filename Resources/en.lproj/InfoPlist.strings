@@ -1,0 +1,5 @@
+/* 許可を求めるときの説明 (英語) */
+"NSCameraUsageDescription" = "NoGreenBack uses the camera to cut out the person and send the video over Syphon.";
+"NSMicrophoneUsageDescription" = "NoGreenBack uses the microphone to add your voice to screen recordings and to create subtitles.";
+"NSLocalNetworkUsageDescription" = "NoGreenBack talks to devices on the same network to switch ATEM switcher inputs.";
+"NSSpeechRecognitionUsageDescription" = "NoGreenBack turns your speech into subtitles. Recognition happens on your Mac.";

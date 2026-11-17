@@ -10,7 +10,9 @@ import Speech
 final class SubtitleEngine: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @unchecked Sendable {
     private let queue = DispatchQueue(label: "subtitles")
     private var session: AVCaptureSession?
-    private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "ja-JP"))
+    /// 認識する言語 (例: "ja-JP"、"en-US")
+    var localeID = "ja-JP"
+    private var recognizer: SFSpeechRecognizer? { SFSpeechRecognizer(locale: Locale(identifier: localeID)) }
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
     private let lock = NSLock()
@@ -39,6 +41,7 @@ final class SubtitleEngine: NSObject, AVCaptureAudioDataOutputSampleBufferDelega
         stop()
         if #available(macOS 26.0, *) {
             let m = ModernTranscriber()
+            m.localeID = localeID
             m.terms = terms
             m.onText = { [weak self] in self?.onText?($0) }
             m.onError = { [weak self] in self?.onError?($0) }
@@ -51,16 +54,16 @@ final class SubtitleEngine: NSObject, AVCaptureAudioDataOutputSampleBufferDelega
         SFSpeechRecognizer.requestAuthorization { status in
             DispatchQueue.main.async {
                 guard status == .authorized else {
-                    self.onError?("音声認識が許可されていません。\n「システム設定 > プライバシーとセキュリティ > 音声認識」で NoGreenBack を許可してください。")
+                    self.onError?(L("音声認識が許可されていません。\n「システム設定 > プライバシーとセキュリティ > 音声認識」で NoGreenBack を許可してください。"))
                     return
                 }
                 guard let recognizer = self.recognizer, recognizer.isAvailable else {
-                    self.onError?("日本語の音声認識が使えません。")
+                    self.onError?(L("選んだ言語の音声認識が使えません。"))
                     return
                 }
                 guard let mic = microphone ?? AVCaptureDevice.default(for: .audio),
                       let input = try? AVCaptureDeviceInput(device: mic) else {
-                    self.onError?("字幕に使うマイクを開けません。")
+                    self.onError?(L("字幕に使うマイクを開けません。"))
                     return
                 }
                 let session = AVCaptureSession()
@@ -126,7 +129,7 @@ final class SubtitleEngine: NSObject, AVCaptureAudioDataOutputSampleBufferDelega
                         self.failures += 1
                         if self.failures >= 5 {
                             let msg = (error as NSError?)?.localizedDescription ?? ""
-                            DispatchQueue.main.async { self.onError?("音声認識を始められません: \(msg)") }
+                            DispatchQueue.main.async { self.onError?(L("音声認識を始められません: %@", msg)) }
                             return
                         }
                     }
@@ -146,6 +149,8 @@ final class SubtitleEngine: NSObject, AVCaptureAudioDataOutputSampleBufferDelega
 /// 端末内で長い話を続けて認識でき、システム設定の「音声入力」に左右されない
 @available(macOS 26.0, *)
 final class ModernTranscriber: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @unchecked Sendable {
+    /// 認識する言語
+    var localeID = "ja-JP"
     var onText: ((String) -> Void)?
     var onError: ((String) -> Void)?
     var onFinal: ((String) -> Void)?
@@ -184,25 +189,25 @@ final class ModernTranscriber: NSObject, AVCaptureAudioDataOutputSampleBufferDel
             do {
                 try await self.run(microphone: microphone)
             } catch {
-                self.onError?("音声認識を始められません: \(error.localizedDescription)")
+                self.onError?(L("音声認識を始められません: %@", error.localizedDescription))
             }
         }
     }
 
     @MainActor
     private func run(microphone: AVCaptureDevice?) async throws {
-        guard let locale = await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: "ja-JP")) else {
-            throw NSError(domain: "NoGreenBack", code: 1, userInfo: [NSLocalizedDescriptionKey: "日本語の認識に対応していません"])
+        guard let locale = await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: localeID)) else {
+            throw NSError(domain: "NoGreenBack", code: 1, userInfo: [NSLocalizedDescriptionKey: L("選んだ言語の認識に対応していません")])
         }
         let transcriber = SpeechTranscriber(locale: locale, preset: .progressiveTranscription)
-        // 日本語の認識データがなければダウンロードする (初回だけ)
+        // 認識データがなければダウンロードする (言語ごとに初回だけ)
         if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
-            onText?("（日本語の認識データを準備しています…）")
+            onText?(L("（音声認識のデータを準備しています…）"))
             try await request.downloadAndInstall()
             onText?("")
         }
         guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
-            throw NSError(domain: "NoGreenBack", code: 2, userInfo: [NSLocalizedDescriptionKey: "音声の形式を決められません"])
+            throw NSError(domain: "NoGreenBack", code: 2, userInfo: [NSLocalizedDescriptionKey: L("音声の形式を決められません")])
         }
         analyzerFormat = format
         converter = AVAudioConverter(from: captureFormat, to: format)
@@ -222,14 +227,14 @@ final class ModernTranscriber: NSObject, AVCaptureAudioDataOutputSampleBufferDel
                 }
             } catch {
                 let msg = error.localizedDescription
-                DispatchQueue.main.async { self?.onError?("音声認識が止まりました: \(msg)") }
+                DispatchQueue.main.async { self?.onError?(L("音声認識が止まりました: %@", msg)) }
             }
         }
         try await analyzer.start(inputSequence: stream)
 
         // マイクを開く
         guard let mic = microphone ?? AVCaptureDevice.default(for: .audio) else {
-            throw NSError(domain: "NoGreenBack", code: 3, userInfo: [NSLocalizedDescriptionKey: "字幕に使うマイクがありません"])
+            throw NSError(domain: "NoGreenBack", code: 3, userInfo: [NSLocalizedDescriptionKey: L("字幕に使うマイクがありません")])
         }
         let input = try AVCaptureDeviceInput(device: mic)
         let session = AVCaptureSession()
@@ -304,21 +309,37 @@ final class ModernTranscriber: NSObject, AVCaptureAudioDataOutputSampleBufferDel
 
 /// 字幕の文字を、映像に重ねる画像にする
 enum SubtitleRenderer {
-    /// 1 行の文字数と、出す行数 (長い話は最後の部分だけ出す)
+    /// 1 行の文字数と、出す行数 (長い話は最後の部分だけ出す)。
+    /// 日本語は 1 行 26 文字で区切り、英語など (かな・漢字のない文) は単語で折り返して 1 行 42 文字まで
     static let lineLength = 26
+    static let latinLineLength = 42
     static let maxLines = 2
+
+    /// 文を行に分ける (全部の行)
+    static func wrap(_ text: String) -> [String] {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return [] }
+        let cjk = t.unicodeScalars.contains { (0x3040...0x30FF).contains($0.value) || (0x4E00...0x9FFF).contains($0.value) }
+        if cjk {
+            let chars = Array(t)
+            return stride(from: 0, to: chars.count, by: lineLength).map {
+                String(chars[$0..<min($0 + lineLength, chars.count)])
+            }
+        }
+        var result: [String] = []
+        var line = ""
+        for word in t.split(separator: " ", omittingEmptySubsequences: true) {
+            if line.isEmpty { line = String(word) }
+            else if line.count + 1 + word.count <= latinLineLength { line += " " + word }
+            else { result.append(line); line = String(word) }
+        }
+        if !line.isEmpty { result.append(line) }
+        return result
+    }
 
     /// 長い文を行に分けて、最後の数行だけにする
     static func lines(_ text: String) -> [String] {
-        let chars = Array(text.trimmingCharacters(in: .whitespacesAndNewlines))
-        guard !chars.isEmpty else { return [] }
-        var result: [String] = []
-        var i = 0
-        while i < chars.count {
-            result.append(String(chars[i..<min(i + lineLength, chars.count)]))
-            i += lineLength
-        }
-        return Array(result.suffix(maxLines))
+        Array(wrap(text).suffix(maxLines))
     }
 
     /// 字幕を置く左下の位置。人物がいれば反対側のすき間の真ん中 (キーボードと同じ)、
@@ -434,26 +455,24 @@ final class SubtitleWindow: NSPanel {
 enum SubtitleFile {
     struct Cue { var start: TimeInterval; var end: TimeInterval; var text: String }
 
-    /// 画面の字幕と同じ形に分ける: 1 行 26 文字で折り返し、2 行を超える長い文は
+    /// 画面の字幕と同じ形に分ける: 1 行ずつ折り返し (日本語 26 文字、英語は単語で 42 文字)、2 行を超える長い文は
     /// 2 行ずつに区切って、文字数に応じて時間を分けて順に出す
     static func split(_ cues: [Cue]) -> [Cue] {
-        let perLine = SubtitleRenderer.lineLength
-        let perCue = perLine * SubtitleRenderer.maxLines
+        let perCue = SubtitleRenderer.maxLines
         var result: [Cue] = []
         for c in cues {
-            let chars = Array(c.text.trimmingCharacters(in: .whitespacesAndNewlines))
-            guard !chars.isEmpty else { continue }
+            let lines = SubtitleRenderer.wrap(c.text)
+            guard !lines.isEmpty else { continue }
             let span = max(c.end - c.start, 0.5)
-            var k = 0
-            while k < chars.count {
-                let piece = Array(chars[k..<min(k + perCue, chars.count)])
-                let lines = stride(from: 0, to: piece.count, by: perLine).map {
-                    String(piece[$0..<min($0 + perLine, piece.count)])
-                }
-                let start = c.start + span * Double(k) / Double(chars.count)
-                let end = c.start + span * Double(k + piece.count) / Double(chars.count)
-                result.append(Cue(start: start, end: end, text: lines.joined(separator: "\n")))
-                k += perCue
+            let total = Double(lines.reduce(0) { $0 + $1.count })
+            var done = 0.0
+            for k in stride(from: 0, to: lines.count, by: perCue) {
+                let piece = Array(lines[k..<min(k + perCue, lines.count)])
+                let n = Double(piece.reduce(0) { $0 + $1.count })
+                let start = c.start + span * done / total
+                let end = c.start + span * (done + n) / total
+                result.append(Cue(start: start, end: end, text: piece.joined(separator: "\n")))
+                done += n
             }
         }
         return result

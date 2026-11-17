@@ -235,7 +235,7 @@ final class ATEMControl: @unchecked Sendable {
         guard let s = atem_sdk_connect(host, &fail) else {
             NSLog("ATEM: connect failed (\(fail))")
             sdkRetryAt = Date().addingTimeInterval(3)
-            let why = fail == 0x63666966 ? "ATEM のソフトと本体のバージョンが合いません" : "見つかりません。もう一度試しています…"
+            let why = fail == 0x63666966 ? L("ATEM のソフトと本体のバージョンが合いません") : L("見つかりません。もう一度試しています…")
             notify { $0.onState?(.connecting, why) }
             return
         }
