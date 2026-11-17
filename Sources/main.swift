@@ -129,11 +129,11 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
         get { previewLock.lock(); defer { previewLock.unlock() }; return _annotationImage }
         set { previewLock.lock(); _annotationImage = newValue; previewLock.unlock() }
     }
-    private var _pointerTip: CGPoint?
-    /// 指し棒の先 (合成した映像の座標。nil なら出さない)
-    var pointerTip: CGPoint? {
-        get { previewLock.lock(); defer { previewLock.unlock() }; return _pointerTip }
-        set { previewLock.lock(); _pointerTip = newValue; previewLock.unlock() }
+    private var _pointer: (tip: CGPoint, angle: CGFloat)?
+    /// 指し棒の先 (合成した映像の座標) と傾き (度)。nil なら出さない
+    var pointer: (tip: CGPoint, angle: CGFloat)? {
+        get { previewLock.lock(); defer { previewLock.unlock() }; return _pointer }
+        set { previewLock.lock(); _pointer = newValue; previewLock.unlock() }
     }
     /// 映像に重ねるキーボード (nil なら出さない)。大きさは映像の横幅に対する割合
     private var _keyboard: (scale: Double, position: KeyboardRenderer.Position)?
@@ -399,10 +399,9 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
         }
 
         // 指し棒 (全画面出力の上のマウスの位置を、人物のいる側から差し出した棒の矢印で指す)
-        if let tip = pointerTip {
-            let right = corner == .bottomRight || corner == .topRight
-            let start = PointerRenderer.base(tip: tip, in: canvas, right: right)
-            if let stick = PointerRenderer.ciImage(extent: canvas, from: start, to: tip) {
+        if let p = pointer {
+            let start = PointerRenderer.base(tip: p.tip, angle: p.angle, in: canvas)
+            if let stick = PointerRenderer.ciImage(extent: canvas, from: start, to: p.tip) {
                 display = stick.composited(over: display).cropped(to: canvas)
                 if background.latestImage != nil { source = display }
             }
@@ -923,6 +922,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     lazy var pointerWindow = PointerWindow()
     var pointerTimer: Timer?
     var lastPointerLocation: CGPoint?
+    /// いまの棒の傾き (度)。向きが変わるときは、すぐ変えずになめらかに回す
+    var pointerAngle: CGFloat?
+    var pointerScreen: NSScreen?
     // キーの説明用のキーボード
     var keyboardButton = NSButton()
     lazy var keyboardWindow = KeyboardWindow()
@@ -1290,6 +1292,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         pointerTimer?.invalidate()
         pointerTimer = nil
         pointerWindow.orderOut(nil)
+        CursorHider.show()
     }
 
     // MARK: UI
@@ -1504,7 +1507,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         keyboardButton.state = keyboardOn ? .on : .off
         keyboardButton.toolTip = "キーボード (JIS 配列・テンキー付き。Mac と Windows のキーの名前入り) の絵を出します。手書きで「このキー」と示すときに使います。\(HotKeys.modifierSymbols)B"
         pointerButton = toolbarToggle("指し棒", #selector(pointerToggled(_:)))
-        pointerButton.toolTip = "マウスの位置を、人物のいる側から差し出した指し棒の矢印で指します。\(HotKeys.modifierSymbols)L"
+        pointerButton.toolTip = "マウスの位置を指し棒の矢印で指します (オンの間はマウスカーソルを隠します)。\(HotKeys.modifierSymbols)L"
         let keyboardPositionPopup = NSPopUpButton()
         keyboardPositionPopup.addItems(withTitles: KeyboardRenderer.Position.allCases.map(\.title))
         keyboardPositionPopup.selectItem(at: keyboardPosition.rawValue)
@@ -2228,38 +2231,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         pointerTimer?.invalidate()
         pointerTimer = nil
         lastPointerLocation = nil
+        pointerAngle = nil
         if on {
             // マウスの位置を 1 秒に 60 回調べる (許可は要らない)
             let t = Timer(timeInterval: 1.0 / 60, repeats: true) { [unowned self] _ in self.updatePointer() }
             RunLoop.main.add(t, forMode: .common)
             pointerTimer = t
+            CursorHider.hide()
             updatePointer()
         } else {
+            CursorHider.show()
             pointerWindow.orderOut(nil)
-            processor.pointerTip = nil
+            processor.pointer = nil
             updateRecordedWindows()
         }
     }
 
-    /// マウスのある画面に指し棒を描く。全画面出力の画面なら、合成した映像の中に描く
+    /// マウスのある画面に指し棒を描く。全画面出力の画面なら、合成した映像の中に描く。
+    /// 先はマウスにぴったり付いていき、棒の傾きは少し遅れてなめらかに変わる
     func updatePointer() {
         let m = NSEvent.mouseLocation
-        guard m != lastPointerLocation else { return }
-        lastPointerLocation = m
         guard let screen = NSScreen.screens.first(where: { NSMouseInRect(m, $0.frame, false) }) else { return }
-        let wasVisible = pointerWindow.isVisible
-        if outputWindow != nil, screen == outputScreen, let canvas = processor.latestImage?.extent, canvas.width > 0 {
-            // 全画面出力は映像を画面に収まるように拡大して真ん中に出している。その逆をたどる
-            pointerWindow.orderOut(nil)
+        if screen != pointerScreen { pointerScreen = screen; pointerAngle = nil }
+        // 全画面出力の画面なら、合成した映像の座標で考える
+        // (映像は画面に収まるように拡大して真ん中に出しているので、その逆をたどる)
+        var tip = m, area = screen.frame
+        let onOutput = outputWindow != nil && screen == outputScreen
+        if onOutput {
+            guard let canvas = processor.latestImage?.extent, canvas.width > 0 else { return }
             let sf = screen.frame
             let s = min(sf.width / canvas.width, sf.height / canvas.height)
             let tx = (sf.width - canvas.width * s) / 2, ty = (sf.height - canvas.height * s) / 2
-            processor.pointerTip = CGPoint(x: (m.x - sf.minX - tx) / s, y: (m.y - sf.minY - ty) / s)
+            tip = CGPoint(x: (m.x - sf.minX - tx) / s, y: (m.y - sf.minY - ty) / s)
+            area = canvas
+        }
+        let target = PointerRenderer.angle(tip: tip, in: area)
+        let current = pointerAngle ?? target
+        let angle = abs(target - current) < 0.1 ? target : current + (target - current) * 0.18
+        // マウスも傾きも変わっていなければ描き直さない
+        guard m != lastPointerLocation || angle != pointerAngle else { return }
+        lastPointerLocation = m
+        pointerAngle = angle
+
+        let wasVisible = pointerWindow.isVisible
+        if onOutput {
+            pointerWindow.orderOut(nil)
+            processor.pointer = (tip, angle)
         } else {
-            processor.pointerTip = nil
-            // 人物のいる側から斜めに差し出す
-            let right = overlayCorner == .bottomRight || overlayCorner == .topRight
-            pointerWindow.show(on: screen, from: PointerRenderer.base(tip: m, in: screen.frame, right: right), to: m)
+            processor.pointer = nil
+            pointerWindow.show(on: screen, from: PointerRenderer.base(tip: tip, angle: angle, in: area), to: tip)
         }
         if pointerWindow.isVisible != wasVisible { updateRecordedWindows() }
     }
