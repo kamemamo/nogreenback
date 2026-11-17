@@ -1335,10 +1335,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         let feather = NSSlider(value: settings.feather, minValue: 0, maxValue: 6,
                                target: self, action: #selector(featherChanged(_:)))
 
+        // 反転とαは前回の設定を使う (左右反転は既定でオン)
+        let defaults = UserDefaults.standard
+        settings.mirror = defaults.object(forKey: "mirror") as? Bool ?? true
+        settings.flipVertical = defaults.object(forKey: "flipVertical") as? Bool ?? true
+        settings.straightAlpha = defaults.bool(forKey: "straightAlpha")
         let mirror = NSButton(checkboxWithTitle: "左右反転", target: self, action: #selector(mirrorChanged(_:)))
+        mirror.state = settings.mirror ? .on : .off
         let flip = NSButton(checkboxWithTitle: "上下反転", target: self, action: #selector(flipChanged(_:)))
         flip.state = settings.flipVertical ? .on : .off
         let straight = NSButton(checkboxWithTitle: "ストレートα", target: self, action: #selector(alphaChanged(_:)))
+        straight.state = settings.straightAlpha ? .on : .off
         straight.toolTip = "オフ: プリマルチプライドα (既定) / オン: ストレートα。受信側で縁が黒くなる・白くなる場合に切り替え"
 
         let smoothing = NSSlider(value: settings.smoothing, minValue: 0, maxValue: 1,
@@ -3048,9 +3055,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     @objc func smoothingChanged(_ sender: NSSlider) { settings.smoothing = sender.doubleValue }
     @objc func tightenChanged(_ sender: NSSlider) { settings.tighten = sender.doubleValue }
     @objc func holdChanged(_ sender: NSSlider) { settings.hold = sender.doubleValue }
-    @objc func mirrorChanged(_ sender: NSButton) { settings.mirror = sender.state == .on }
-    @objc func flipChanged(_ sender: NSButton) { settings.flipVertical = sender.state == .on }
-    @objc func alphaChanged(_ sender: NSButton) { settings.straightAlpha = sender.state == .on }
+    @objc func mirrorChanged(_ sender: NSButton) {
+        settings.mirror = sender.state == .on
+        UserDefaults.standard.set(settings.mirror, forKey: "mirror")
+    }
+    @objc func flipChanged(_ sender: NSButton) {
+        settings.flipVertical = sender.state == .on
+        UserDefaults.standard.set(settings.flipVertical, forKey: "flipVertical")
+    }
+    @objc func alphaChanged(_ sender: NSButton) {
+        settings.straightAlpha = sender.state == .on
+        UserDefaults.standard.set(settings.straightAlpha, forKey: "straightAlpha")
+    }
 }
 
 let app = NSApplication.shared
