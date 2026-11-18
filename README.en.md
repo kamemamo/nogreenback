@@ -80,7 +80,7 @@ Turn on **Draw** to draw on the screen.
 - **Hold the draw key (⌥ Option by default)** and drag to draw. A colored frame shows while the key is held. Release it and clicks go to the apps behind.
 - **Clear all**: press the draw key twice quickly, right-click while holding it, or press Clear (⌃⌥⌘ C).
 - Choose color, width, and whether lines fade after 3 or 10 seconds.
-- While **Full Screen** is on, you can draw only on the output screen and the screen being recorded. Other screens, such as the one with the control window, stay usable with the mouse even while you hold the draw key or Pen Lock is on.
+- While **Full Screen** is on, you can draw only on the output screen and the screen being recorded. Other screens, such as the one with the control window, stay usable with the mouse even while you hold the draw key or Pen Lock is on. Turning off Full Screen also turns off Pen Lock.
 - Works on every connected screen, including pen displays. **Pen Lock** (⌃⌥⌘ D) lets you draw without holding a key.
 
 ### Keyboard

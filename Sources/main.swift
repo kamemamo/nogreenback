@@ -2208,6 +2208,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
             outputWindow = w
             w.show(on: outputScreen)
         } else {
+            // 全画面を外したらペン固定も外す (そのままだと、操作ウィンドウのある画面まで
+            // 手書きがクリックを受け止めて、マウスで操作できなくなるため)
+            if outputWindow != nil, penLatched {
+                penLatched = false
+                annotation?.setDrawing(false)
+            }
             outputWindow?.orderOut(nil)
             outputWindow = nil
         }
