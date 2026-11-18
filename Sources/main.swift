@@ -760,6 +760,18 @@ final class Annotations {
     private(set) var windows: [AnnotationWindow] = []
     private var shown = false
     private var drawing = false
+    /// 描ける画面の範囲 (nil ならすべての画面)。全画面出力を出している間は、
+    /// 全画面出力と録画している画面だけにして、ほかの画面はマウスでふつうに操作できるようにする
+    private var allowedFrames: [CGRect]?
+
+    private func allowed(_ w: AnnotationWindow) -> Bool { allowedFrames?.contains(w.frame) ?? true }
+
+    /// 描ける画面を決める (nil ならすべて)
+    func setAllowedScreens(_ screens: [NSScreen]?) {
+        allowedFrames = screens?.map(\.frame)
+        windows.forEach { $0.setDrawing(drawing && allowed($0)) }
+        updateVisibility(bringFront: false)
+    }
 
     var color: NSColor = .systemRed { didSet { windows.forEach { $0.view.color = color } } }
     var lineWidth: CGFloat = 5 { didSet { windows.forEach { $0.view.lineWidth = lineWidth } } }
@@ -789,7 +801,7 @@ final class Annotations {
             w.view.fadeAfter = fadeAfter
             w.view.onChange = onChange
             w.cover(screen)
-            w.setDrawing(drawing)
+            w.setDrawing(drawing && allowed(w))
             return w
         }
         updateVisibility(bringFront: true)
@@ -798,7 +810,7 @@ final class Annotations {
     /// 画面に出しておくのは、描ける状態 (描くキーを押している・ペン固定) か、線が残っている画面のウィンドウだけ。
     /// 何も描いていないのに画面と同じ大きさの透明なウィンドウを出しっぱなしにすると、
     /// 画面 1 枚につき数十 MB の描画用メモリを使い続けるため
-    private func wants(_ w: AnnotationWindow) -> Bool { shown && (drawing || !w.view.strokes.isEmpty) }
+    private func wants(_ w: AnnotationWindow) -> Bool { shown && allowed(w) && (drawing || !w.view.strokes.isEmpty) }
 
     private func updateVisibility(bringFront: Bool) {
         for w in windows {
@@ -818,7 +830,7 @@ final class Annotations {
         let changed = on != drawing
         drawing = on
         if changed && on { updateVisibility(bringFront: false) }   // 描く前に出す
-        windows.forEach { $0.setDrawing(on) }
+        windows.forEach { $0.setDrawing(on && allowed($0)) }
         if changed && !on { updateVisibility(bringFront: false) }  // 線がなければ隠す
     }
     func orderFront() { shown = true; updateVisibility(bringFront: true) }
@@ -1079,7 +1091,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         set { UserDefaults.standard.set(newValue, forKey: "overlayScale") }
     }
     // 画面録画
-    var recorder: AnyObject?   // ScreenRecorder (macOS 12.3 以降)
+    var recorder: AnyObject? { didSet { updateDrawableScreens() } }   // ScreenRecorder (macOS 12.3 以降)
     var recordButton = ToggleButton()
     var recordLabel = NSTextField(labelWithString: "")
     var recordStart = Date()
@@ -2198,7 +2210,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         }
         updateOverlayVisibility()
         updateRecordedWindows()
+        updateDrawableScreens()
         refreshAnnotationImage()
+    }
+
+    /// 全画面出力を出している間は、手書きで描ける画面を全画面出力と録画している画面だけにする
+    /// (操作ウィンドウのある画面などは、描くキーを押していてもマウスでふつうに操作できる)
+    func updateDrawableScreens() {
+        guard let annotation else { return }
+        guard outputWindow != nil else { annotation.setAllowedScreens(nil); return }
+        var screens = [outputScreen]
+        if recorder != nil, recordScreen != outputScreen { screens.append(recordScreen) }
+        annotation.setAllowedScreens(screens)
     }
 
     func placeOutput() {
@@ -2417,6 +2440,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         settings.pipScale = overlayScale
         overlay?.place(on: overlayScreen, corner: overlayCorner, scale: overlayScale)
         annotation?.coverAllScreens()
+        updateDrawableScreens()
         // 人物の位置が変わったら、キーボードを反対側へ
         if keyboardButton.state == .on { updateKeyboard() }
     }
