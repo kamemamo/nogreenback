@@ -2,7 +2,7 @@
 
 日本語 | [English](README.en.md)
 
-Webカメラ映像から人物だけをリアルタイムで切り抜き（背景は透明）、Syphon で他のアプリ（OBS、Resolume、MadMapper など）へ送る macOS アプリです。
+Webカメラ映像から人物だけをリアルタイムで切り抜き（グリーンバック不要）、画面に重ねたり、背景と合成して全画面で出したり、画面を収録したりできる macOS アプリです。手書き・キーボード・指し棒・リアルタイム字幕も加えられます。切り抜いた人物は背景を透明にして、Syphon で他のアプリ（OBS、Resolume、MadMapper など）へ送ることもできます。
 
 ![NoGreenBack の画面（背景に画面を映し、人物を右下に重ねたところ）](docs/images/screenshot.jpg)
 

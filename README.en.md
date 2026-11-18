@@ -2,7 +2,7 @@
 
 [日本語](README.md) | English
 
-NoGreenBack is a macOS app that cuts the person out of a webcam image in real time (with a transparent background) and sends it to other apps such as OBS, Resolume and MadMapper over Syphon. It can also put the person over your screen, composite a background, record the screen, and add drawings, a keyboard, a pointer and live subtitles — no green screen needed.
+NoGreenBack is a macOS app that cuts the person out of a webcam image in real time, with no green screen. It can put the person over your screen, composite a background and show the result full screen, and record the screen, with drawings, a keyboard, a pointer and live subtitles on top. The cut-out person can also be sent with a transparent background to other apps such as OBS, Resolume and MadMapper over Syphon.
 
 ![NoGreenBack window (the screen as the background, with the person in the bottom right)](docs/images/screenshot.jpg)
 
