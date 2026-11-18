@@ -790,15 +790,38 @@ final class Annotations {
             w.view.onChange = onChange
             w.cover(screen)
             w.setDrawing(drawing)
-            if shown { w.orderFrontRegardless() }
             return w
+        }
+        updateVisibility(bringFront: true)
+    }
+
+    /// 画面に出しておくのは、描ける状態 (描くキーを押している・ペン固定) か、線が残っている画面のウィンドウだけ。
+    /// 何も描いていないのに画面と同じ大きさの透明なウィンドウを出しっぱなしにすると、
+    /// 画面 1 枚につき数十 MB の描画用メモリを使い続けるため
+    private func wants(_ w: AnnotationWindow) -> Bool { shown && (drawing || !w.view.strokes.isEmpty) }
+
+    private func updateVisibility(bringFront: Bool) {
+        for w in windows {
+            if wants(w) {
+                if bringFront || !w.isVisible { w.orderFrontRegardless() }
+            } else if w.isVisible {
+                w.orderOut(nil)
+                // 隠すと描き直されないので、全画面出力の映像に入れていた線もここで消す
+                w.view.onChange?(w.view)
+            }
         }
     }
 
-    func clear() { windows.forEach { $0.view.clear() } }
-    func tick() { windows.forEach { $0.view.tick() } }
-    func setDrawing(_ on: Bool) { drawing = on; windows.forEach { $0.setDrawing(on) } }
-    func orderFront() { shown = true; windows.forEach { $0.orderFrontRegardless() } }
+    func clear() { windows.forEach { $0.view.clear() }; updateVisibility(bringFront: false) }
+    func tick() { windows.forEach { $0.view.tick() }; updateVisibility(bringFront: false) }
+    func setDrawing(_ on: Bool) {
+        let changed = on != drawing
+        drawing = on
+        if changed && on { updateVisibility(bringFront: false) }   // 描く前に出す
+        windows.forEach { $0.setDrawing(on) }
+        if changed && !on { updateVisibility(bringFront: false) }  // 線がなければ隠す
+    }
+    func orderFront() { shown = true; updateVisibility(bringFront: true) }
     func orderOut() { shown = false; windows.forEach { $0.orderOut(nil) } }
 }
 

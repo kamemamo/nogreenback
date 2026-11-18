@@ -170,7 +170,8 @@ final class ScreenFeed: NSObject, SCStreamOutput, SCStreamDelegate {
         config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
         config.pixelFormat = kCVPixelFormatType_32BGRA
         config.showsCursor = true
-        config.queueDepth = 5
+        // 取り込んだコマをためておく数。最新の 1 枚しか使わないので少なめ (1 枚約 9 MB)
+        config.queueDepth = 3
 
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
