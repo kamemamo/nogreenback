@@ -327,8 +327,9 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
         guard let maskBuffer = request.results?.first?.pixelBuffer else { return }
 
         // 2) マスクを映像サイズに拡大して合成
-        var source = deflickered(CIImage(cvPixelBuffer: pixelBuffer), pixelBuffer: pixelBuffer)
+        let source = deflickered(CIImage(cvPixelBuffer: pixelBuffer), pixelBuffer: pixelBuffer)
         let extent = source.extent
+        lastExtent = extent
         guard let cb = queue.makeCommandBuffer() else { return }
         var mask = CIImage(cvPixelBuffer: maskBuffer, options: [.colorSpace: NSNull()])
         // ちらつき抑制 (時間方向の平滑化)
@@ -367,7 +368,43 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
         }
         // 「人物」がオフなら、人物を出さない (背景映像がないときは透明になる)
         if !settings.showPerson { cutout = CIImage(color: .clear).cropped(to: extent) }
-        source = cutout
+        compose(cutout: cutout, extent: extent, commandBuffer: cb)
+
+        frameCount += 1
+        let now = CACurrentMediaTime()
+        if now - fpsStart >= 1 {
+            let fps = Double(frameCount) / (now - fpsStart)
+            frameCount = 0; fpsStart = now
+            onFPS?(fps)
+        }
+    }
+
+    /// カメラがないとき (つないでいない・止まっている) にも、背景・字幕・手書きなどを出し続けるためのタイマー
+    private var idleTimer: DispatchSourceTimer?
+    /// 最後に受け取ったカメラの映像の大きさ (カメラがないときは、この大きさで合成する)
+    private var lastExtent = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+
+    /// カメラの映像が 0.5 秒以上届いていない間は、人物なしで合成して出す
+    /// (カメラがないと何も描かれず、全画面出力が黒いままになるため)。
+    /// queue はカメラの映像を受け取るのと同じキューにする (合成の処理が同時に走らないように)
+    func startIdleRendering(on q: DispatchQueue) {
+        guard idleTimer == nil else { return }
+        let t = DispatchSource.makeTimerSource(queue: q)
+        t.schedule(deadline: .now() + 1, repeating: 1.0 / 25)
+        t.setEventHandler { [weak self] in self?.renderWithoutCamera() }
+        t.resume()
+        idleTimer = t
+    }
+
+    private func renderWithoutCamera() {
+        guard CFAbsoluteTimeGetCurrent() - lastFrameTime > 0.5, let cb = queue.makeCommandBuffer() else { return }
+        compose(cutout: CIImage(color: .clear).cropped(to: lastExtent), extent: lastExtent, commandBuffer: cb)
+    }
+
+    /// 切り抜いた人物 (cutout) に背景・キーボード・手書き・指し棒・字幕を重ねて、
+    /// プレビュー・全画面出力・Syphon に出す
+    private func compose(cutout: CIImage, extent: CGRect, commandBuffer cb: MTLCommandBuffer) {
+        var source = cutout
 
         // 合成する映像の大きさ。高さはカメラのまま、横幅を出す画面の比率に合わせる
         let aspect = settings.canvasAspect
@@ -469,14 +506,6 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
 
         previewLock.lock(); _latestImage = display; _latestCutout = cutout; previewLock.unlock()
         requestRedraw()
-
-        frameCount += 1
-        let now = CACurrentMediaTime()
-        if now - fpsStart >= 1 {
-            let fps = Double(frameCount) / (now - fpsStart)
-            frameCount = 0; fpsStart = now
-            onFPS?(fps)
-        }
     }
 }
 
@@ -1315,6 +1344,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard let mtl = MTLCreateSystemDefaultDevice() else { fatalError("Metal 非対応") }
         processor = Processor(device: mtl, settings: settings)
+        processor.startIdleRendering(on: videoQueue)
         processor.onFPS = { [weak self] fps in
             DispatchQueue.main.async { self?.fpsLabel.stringValue = String(format: "%.1f fps", fps) }
         }

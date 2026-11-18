@@ -71,6 +71,7 @@ Put video from a USB capture device (such as slides from another PC), or this Ma
 | Aspect ratio | "Match output screen" avoids black bars when shown full screen |
 
 - Drawings made on the full-screen output also go into the composited video (preview, and Syphon when there's a background).
+- With no camera connected (or while the camera has stopped), the background, subtitles and drawings are still shown, without the person.
 - To record the full-screen output, set "Screen to record" to the output screen.
 
 ### Drawing
