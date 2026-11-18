@@ -104,7 +104,8 @@ Turn on **Pointer** (⌃⌥⌘ L) to point at the mouse position with a pointer 
 **● Record** records the "Screen to record" and saves `NoGreenBack date time.mp4` to your Movies folder.
 
 - The overlaid person and drawings are recorded; the NoGreenBack control window isn't.
-- When recording the same screen as the control window, the window goes to the Dock and a small "■ Stop Recording" button appears at the top right (not recorded). Stop with it or ⌃⌥⌘ R.
+- A small "■ Stop Recording" button with the elapsed time appears at the top right of the screen being recorded, so you can tell which screen is recorded (it isn't recorded itself). Stop with it or ⌃⌥⌘ R.
+- When recording the same screen as the control window, the window goes to the Dock while recording and comes back when you stop.
 - Like OBS's Hybrid MP4, recordings survive crashes and power loss: the app writes `.mov` fragments every 2 seconds and converts to `.mp4` without re-encoding when you stop.
 - Quality settings: video 4–40 Mbps, long side 1280 / 1920 / 2560 / 3840 / Original, 24–60 fps, H.264 or HEVC, audio 64–256 kbps. An estimate of the size per hour is shown.
 - Choose the microphone in "Microphone" ("None" for no audio). Screen Recording and Microphone permissions are needed the first time.

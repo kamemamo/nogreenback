@@ -894,7 +894,8 @@ final class ToggleButton: NSButton {
 final class RecordingPanel: NSPanel {
     let timeLabel = NSTextField(labelWithString: "0:00")
 
-    init(target: AnyObject, action: Selector) {
+    /// restoresWindow: 止めたときに操作ウィンドウを戻すか (ヒントの文に使う)
+    init(target: AnyObject, action: Selector, restoresWindow: Bool) {
         super.init(contentRect: NSRect(x: 0, y: 0, width: 168, height: 44),
                    styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         let back = NSVisualEffectView()
@@ -906,7 +907,9 @@ final class RecordingPanel: NSPanel {
         let button = ToggleButton(title: L("■ 録画停止"), target: target, action: action)
         button.onColor = .systemRed
         button.state = .on
-        button.toolTip = L("録画を止めて、操作ウィンドウを戻します (%@R)", HotKeys.modifierSymbols)
+        button.toolTip = restoresWindow
+            ? L("録画を止めて、操作ウィンドウを戻します (%@R)", HotKeys.modifierSymbols)
+            : L("この画面を録画しています。押すと録画を止めます (%@R)", HotKeys.modifierSymbols)
         timeLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
         timeLabel.textColor = .white
         let row = NSStackView(views: [button, timeLabel])
@@ -2851,15 +2854,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
                 self?.showAlert(msg)
                 if self?.recorder != nil { self?.recordToggled() }
             }
+            // 録画している画面の右上に、小さな停止ボタンと経過時間を出す
+            // (画面が 2 つ以上あるとき、どの画面を録画しているかひと目でわかるように)。
             // 操作ウィンドウと同じ画面を録画するとき (モニターが 1 台のときなど) は、
-            // 録画中はウィンドウを Dock にしまい、代わりに小さな停止ボタンを出す。
+            // 録画中はウィンドウを Dock にしまう。
             // 停止ボタンは録画に映らないよう、録画を始める前に出しておいて対象から外す
             let hideWindow = window.screen == recordScreen && !window.isMiniaturized
-            if hideWindow {
-                let panel = RecordingPanel(target: self, action: #selector(recordToggled))
-                panel.show(on: recordScreen)
-                recordingPanel = panel
-            }
+            let panel = RecordingPanel(target: self, action: #selector(recordToggled), restoresWindow: hideWindow)
+            panel.show(on: recordScreen)
+            recordingPanel = panel
             Task { @MainActor in
                 do {
                     _ = try await rec.start(screen: self.recordScreen,
