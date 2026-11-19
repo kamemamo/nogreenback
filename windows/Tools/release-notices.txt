@@ -1,0 +1,28 @@
+NoGreenBack for Windows - third-party notices
+
+NoGreenBack itself is released under the MIT License (licenses/NoGreenBack-LICENSE.txt).
+This package also includes the following third-party software and models.
+
+Person segmentation models (models/)
+- mediapipe_selfie_landscape.onnx
+  MediaPipe Selfie Segmentation (landscape), converted to ONNX.
+  https://huggingface.co/onnx-community/mediapipe_selfie_segmentation_landscape
+  Apache License 2.0 (licenses/Apache-2.0.txt)
+- modnet.onnx
+  MODNet (https://github.com/ZHKKKe/MODNet), converted to ONNX.
+  https://huggingface.co/Xenova/modnet
+  Apache License 2.0 (licenses/Apache-2.0.txt)
+
+Libraries
+- .NET runtime and WPF - MIT License. https://github.com/dotnet/runtime, https://github.com/dotnet/wpf
+- ONNX Runtime (Microsoft.ML.OnnxRuntime.DirectML) - MIT License.
+  Its third-party notices: licenses/ONNXRuntime-ThirdPartyNotices.txt
+- DirectML (Microsoft.AI.DirectML) - Microsoft Software License Terms: licenses/DirectML-LICENSE.txt
+  Its third-party notices: licenses/DirectML-ThirdPartyNotices.txt
+- Whisper.net - MIT License: licenses/Whisper.net-LICENSE.txt
+- whisper.cpp / ggml (inside the Whisper.net runtimes) - MIT License. https://github.com/ggml-org/whisper.cpp
+- Vortice.Windows (Direct3D 11, DXGI, DirectComposition, Media Foundation, D3DCompiler bindings) - MIT License.
+  https://github.com/amerkoleci/Vortice.Windows
+
+The speech recognition models used for subtitles are not included. They are downloaded from
+https://huggingface.co/ggerganov/whisper.cpp (MIT License) the first time subtitles are turned on.

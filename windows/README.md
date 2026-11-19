@@ -29,6 +29,12 @@ windows/NoGreenBack/bin/Debug/net10.0-windows10.0.22621.0/NoGreenBack.exe
 dotnet run --project windows/Tools/MakeIcon
 ```
 
+配布用の zip（.NET を同梱した自己完結型・署名なし）は、次で `windows/dist/NoGreenBack-Windows-<版>.zip` にできます。人物の切り抜きのモデルを同梱するので、先に `windows/models/download.ps1` を実行しておきます。zip に添えるライセンスの説明は `windows/Tools/release-notices.txt` です。
+
+```bash
+powershell -ExecutionPolicy Bypass -File windows/Tools/make-release.ps1
+```
+
 ## できていること
 
 - 操作ウィンドウの骨組み（上部のボタン、プレビューの場所、サイドバー）
