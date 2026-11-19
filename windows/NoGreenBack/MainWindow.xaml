@@ -71,7 +71,33 @@
                 <ToggleButton Style="{StaticResource PillToggle}" Content="{l:L 指し棒}" IsChecked="{Binding State.PointerOn}" x:Name="PointerButton"
                               ToolTip="{l:L 'マウスの位置を指し棒の矢印で指します (オンの間はマウスカーソルを隠します)。%@L', Shortcut=True}"/>
                 <!-- ATEM の入力ボタンと「ミックス」は、ATEM が USB でつながっている間だけここに出す -->
-                <StackPanel x:Name="AtemButtons" Orientation="Horizontal" Visibility="Collapsed"/>
+                <StackPanel x:Name="AtemButtons" Orientation="Horizontal">
+                    <StackPanel.Style>
+                        <Style TargetType="StackPanel">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Atem.Connected}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </StackPanel.Style>
+                    <Rectangle Width="1" Margin="4,4,10,4" Fill="#DCDCE0"/>
+                    <TextBlock Text="ATEM" VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{StaticResource SubtleTextBrush}"/>
+                    <ItemsControl ItemsSource="{Binding Atem.Inputs}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <ToggleButton Style="{StaticResource PillToggle}" Content="{Binding Label}" ToolTip="{Binding Name}"
+                                              IsChecked="{Binding IsProgram, Mode=OneWay}" Click="AtemInput_Click"/>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <CheckBox Content="{l:L ミックス}" IsChecked="{Binding Settings.AtemMix}" VerticalAlignment="Center" Margin="2,0,6,0"
+                              ToolTip="{l:L 'オンにすると、ATEM で設定している切り替え効果 (ミックスなど) で移ります。ミックスは 0.5 秒。オフならすぐ切り替えます (カット)'}"/>
+                </StackPanel>
             </WrapPanel>
         </DockPanel>
 
@@ -334,11 +360,14 @@
                     <TextBlock Style="{StaticResource SectionHeader}" Text="{l:L 外部の音声}"/>
                     <DockPanel Style="{StaticResource Row}">
                         <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 入力}"/>
-                        <ComboBox IsEnabled="False" ToolTip="{l:L まだ作っていません}"/>
+                        <l:LevelMeter DockPanel.Dock="Right" Width="60" Height="8" Margin="6,0,0,0" Value="{Binding External.Meter}"/>
+                        <ComboBox ItemsSource="{Binding External.InputChoices}" SelectedValuePath="Id" SelectedValue="{Binding External.InputSelectedId}"
+                                  ToolTip="{l:L キャプチャーボードやオーディオインターフェースなど、取り込む音声の機器。録画のときはマイクの音と混ぜて入ります}"/>
                     </DockPanel>
                     <DockPanel Style="{StaticResource Row}">
                         <TextBlock Style="{StaticResource RowLabel}" Text="{l:L スピーカー}"/>
-                        <ComboBox IsEnabled="False" ToolTip="{l:L まだ作っていません}"/>
+                        <ComboBox ItemsSource="{Binding External.OutputChoices}" SelectedValuePath="Id" SelectedValue="{Binding External.OutputSelectedId}"
+                                  ToolTip="{l:L 取り込んだ音を、そのまま出すスピーカー}"/>
                     </DockPanel>
                     <DockPanel Style="{StaticResource Row}" ToolTip="{l:L 外部の音の音量。スピーカーに出す音と、録画に入る音の両方が変わります}">
                         <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 音量}"/>
@@ -357,9 +386,19 @@
                     </DockPanel>
 
                     <!-- ATEM スイッチャー (USB で ATEM がつながっている間だけ出す) -->
-                    <StackPanel x:Name="AtemSection" Visibility="Collapsed">
+                    <StackPanel x:Name="AtemSection">
+                        <StackPanel.Style>
+                            <Style TargetType="StackPanel">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Atem.Present}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </StackPanel.Style>
                         <TextBlock Style="{StaticResource SectionHeader}" Text="{l:L ATEM スイッチャー}"/>
-                        <TextBlock x:Name="AtemStatus" TextWrapping="Wrap"/>
+                        <TextBlock x:Name="AtemStatus" TextWrapping="Wrap" Foreground="{StaticResource SubtleTextBrush}" Text="{Binding Atem.Status}"/>
                     </StackPanel>
 
                 </StackPanel>

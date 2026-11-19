@@ -528,7 +528,7 @@ Mac では `UserDefaults`（キーは下の表の名前）に保存していま�
 1. **言語と UI: C#（.NET 10）＋ WPF**
    - 透明でクリックを通す常駐ウィンドウ（ワイプ・手書き・ホワイトボード・字幕・キーボード・指し棒）が多いので、Win32 の指定（`WS_EX_LAYERED` など）を付けやすい WPF にする。WinUI 3 は透明なウィンドウや多数のウィンドウの扱いが手間なので使わない。
    - 映像（プレビュー・全画面出力・Spout）は WPF に描かせず、Direct3D 11 で描く（C# からは Vortice.Windows などを使う）。
-   - ATEM の SDK は C++ なので、小さな C++ の DLL を挟む（Mac 版の `Sources/ATEMSDK` と同じ考え方）。
+   - ATEM の SDK は Windows では COM なので、C# から直接使う（2026-11-19 に決め直し。インターフェースは SDK の `BMDSwitcherAPI.idl` のとおりに宣言する。Mac 版の `Sources/ATEMSDK` のような C++ の窓口は挟まない）。
    - Spout は、送り手の決まり（共有メモリの名前の一覧・送り手の情報・共有テクスチャ・アクセス用のミューテックス）が簡単なので、SDK を使わず C# だけで送る（2026-11-19 に決め直し。ビルドに C++ の道具が要らないようにするため）。
 2. **人物の切り抜き: ONNX Runtime ＋ DirectML（GPU がなければ CPU）**
    - 品質の 3 段階: Fast は MediaPipe Selfie Segmentation（landscape、入力 256x144）、Balanced は MODNet（入力 512x288）、Accurate は MODNet（入力 672x384）。GPU（DirectML）が使えない PC では、どの品質でも Fast を CPU で動かす。

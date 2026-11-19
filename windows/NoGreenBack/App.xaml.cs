@@ -78,6 +78,8 @@ public partial class App : Application
         Model.Video.Dispose();
         Model.Displays.Dispose();
         Model.Mic.Dispose();
+        Model.External.Dispose();
+        Model.Atem.Dispose();
         Model.Settings.Save();
         singleInstance?.ReleaseMutex();
         base.OnExit(e);

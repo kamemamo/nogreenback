@@ -106,7 +106,8 @@ public sealed partial class RecordingController : Observable, IDisposable
             model.Overlays.UpdateCaptureExclusion();
 
             var mic = model.Mic.Enabled ? model.Mic : null;
-            recorder = await Task.Run(() => new ScreenRecorder(display, options, mic, temp));
+            var external = model.External;
+            recorder = await Task.Run(() => new ScreenRecorder(display, options, mic, temp, external));
             startedAt = DateTime.Now;
             elapsedTimer.Start();
             UpdateElapsed();

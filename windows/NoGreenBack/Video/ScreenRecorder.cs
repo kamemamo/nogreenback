@@ -58,11 +58,29 @@ public sealed class ScreenRecorder : IDisposable
     /// 書き出し中の、断片化した MP4 のパス
     public string TempPath => tempPath;
 
-    public ScreenRecorder(DisplayInfo display, RecordOptions options, MicInput? mic, string tempPath)
+    // 外部の音声 (SPEC.md 9 章「録画の音声」)。マイクがあれば外部の音をためておき、マイクの音に 外部 × 下げる倍率 × 音量 を足す。
+    // マイクが「なし」なら外部の音だけを × 音量 で録る。外部の機器とマイクが同じ機器なら混ぜない (二重になるため)
+    readonly ExternalAudio? external;
+    readonly bool mixExternal, externalOnly;
+    readonly object extLock = new();
+    readonly float[] extBuf = new float[MicInput.SampleRate];   // たまった外部の音 (リングバッファ)
+    int extStart, extCount;
+    float[] mixBuf = new float[4800];
+    float duckGain = 1;
+    long lastSpeechTicks = long.MinValue;
+
+    public ScreenRecorder(DisplayInfo display, RecordOptions options, MicInput? mic, string tempPath, ExternalAudio? external = null)
     {
         this.mic = mic;
         this.tempPath = tempPath;
         fps = options.Fps;
+        bool hasMic = mic is { Enabled: true };
+        if (external?.OpenInputId is { } ext && !(hasMic && ext == mic!.OpenDeviceId))
+        {
+            this.external = external;
+            mixExternal = hasMic;
+            externalOnly = !hasMic;
+        }
 
         // 長辺は、画面の実際の画素数を縦横比を保って縮め、偶数にそろえる。画面のほうが小さければ画面のまま
         double scale = options.LongSide > 0 ? Math.Min(1, (double)options.LongSide / Math.Max(display.Width, display.Height)) : 1;
@@ -105,7 +123,7 @@ public sealed class ScreenRecorder : IDisposable
         }
 
         // 音声: AAC・48 kHz・モノラル (Windows の AAC エンコーダーは 96 / 128 / 160 / 192 kbps だけなので、近いものにする)
-        if (mic is { Enabled: true })
+        if (hasMic || externalOnly)
         {
             int kbps = new[] { 96, 128, 160, 192 }.MinBy(k => Math.Abs(k - options.AudioKbps));
             using var outType = MediaFactory.MFCreateMediaType();
@@ -140,7 +158,8 @@ public sealed class ScreenRecorder : IDisposable
         session = pool.CreateCaptureSession(item);
         session.IsCursorCaptureEnabled = true;
         try { session.IsBorderRequired = false; } catch { }
-        if (mic != null) mic.SamplesArrived += OnAudio;
+        if (hasMic) mic!.SamplesArrived += OnMic;
+        if (this.external != null) this.external.SamplesArrived += OnExternal;
         session.StartCapture();
         Log.Write($"録画: {display.Name} {display.Width}x{display.Height} → {outW}x{outH} {fps}fps {options.Mbps}Mbps {(options.Hevc ? "HEVC" : "H.264")}");
     }
@@ -191,6 +210,61 @@ public sealed class ScreenRecorder : IDisposable
         }
     }
 
+    /// 外部の音が届いた。マイクと混ぜるときはためておき、外部の音だけを録るときはそのまま書く
+    void OnExternal(float[] samples, int count, long arrivedTicks)
+    {
+        float vol = (float)external!.Volume;
+        if (externalOnly)
+        {
+            lock (extLock)
+            {
+                if (mixBuf.Length < count) mixBuf = new float[count];
+                for (int i = 0; i < count; i++) mixBuf[i] = Math.Clamp(samples[i] * vol, -1f, 1f);
+                OnAudio(mixBuf, count, arrivedTicks);
+            }
+            return;
+        }
+        lock (extLock)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                // たまりすぎたら (0.25 秒を超えたら) 古いほうを捨てて、遅れないようにする
+                if (extCount >= MicInput.SampleRate / 4) { extStart = (extStart + 1) % extBuf.Length; extCount--; }
+                extBuf[(extStart + extCount) % extBuf.Length] = samples[i];
+                extCount++;
+            }
+        }
+    }
+
+    /// マイクの音が届いた。外部の音を混ぜるときは、声で下げる倍率を掛けて足す
+    void OnMic(float[] samples, int count, long arrivedTicks)
+    {
+        if (!mixExternal) { OnAudio(samples, count, arrivedTicks); return; }
+        // 声で下げる: マイクの音の大きさ (RMS) が -36 dBFS を超えたら、外部の音を「下げる倍率」まで 0.05 秒で下げ、
+        // 話し終わって 0.6 秒たったら 0.5 秒かけて戻す
+        double sum = 0;
+        for (int i = 0; i < count; i++) sum += samples[i] * samples[i];
+        double db = 20 * Math.Log10(Math.Sqrt(sum / Math.Max(1, count)) + 1e-12);
+        if (db > -36) lastSpeechTicks = arrivedTicks;
+        bool holding = lastSpeechTicks != long.MinValue && Stopwatch.GetElapsedTime(lastSpeechTicks, arrivedTicks).TotalSeconds < 0.6;
+        float duck = (float)external!.DuckFactor, vol = (float)external.Volume;
+        float target = holding ? duck : 1;
+        float range = Math.Max(1e-6f, 1 - duck);
+        float down = range / (0.05f * MicInput.SampleRate), up = range / (0.5f * MicInput.SampleRate);
+        lock (extLock)
+        {
+            if (mixBuf.Length < count) mixBuf = new float[count];
+            for (int i = 0; i < count; i++)
+            {
+                float e = 0;
+                if (extCount > 0) { e = extBuf[extStart]; extStart = (extStart + 1) % extBuf.Length; extCount--; }
+                duckGain = duckGain > target ? Math.Max(target, duckGain - down) : Math.Min(target, duckGain + up);
+                mixBuf[i] = Math.Clamp(samples[i] + e * duckGain * vol, -1f, 1f);
+            }
+            OnAudio(mixBuf, count, arrivedTicks);
+        }
+    }
+
     void OnAudio(float[] samples, int count, long arrivedTicks)
     {
         lock (writeLock)
@@ -221,7 +295,8 @@ public sealed class ScreenRecorder : IDisposable
     /// 取り込みを止めて、断片化した MP4 を閉じる
     public void Stop()
     {
-        if (mic != null) mic.SamplesArrived -= OnAudio;
+        if (mic != null) mic.SamplesArrived -= OnMic;
+        if (external != null) external.SamplesArrived -= OnExternal;
         try { session.Dispose(); } catch { }
         lock (writeLock)
         {

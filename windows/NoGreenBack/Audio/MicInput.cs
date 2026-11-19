@@ -107,6 +107,9 @@ public sealed class MicInput : Observable, IDisposable
     /// マイクを使うか (「なし」でなければ使う)
     public bool Enabled => settings.RecordMic;
 
+    /// 開いているマイクの機器の ID (開いていなければ null)
+    public string? OpenDeviceId => graph != null ? openId : null;
+
     async Task RefreshSystemName()
     {
         try

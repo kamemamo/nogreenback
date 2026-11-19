@@ -22,6 +22,12 @@ public sealed class AppModel
     /// マイク (録画と、メーター)
     public Audio.MicInput Mic { get; }
 
+    /// 外部の音声 (スピーカーに出し、録画ではマイクと混ぜる)
+    public Audio.ExternalAudio External { get; }
+
+    /// ATEM スイッチャー
+    public Atem.AtemController Atem { get; }
+
     /// 画面録画
     public Recording.RecordingController Recording { get; }
 
@@ -33,6 +39,8 @@ public sealed class AppModel
         Outputs = new Video.OutputWindows(this);
         Overlays = new Overlays.OverlayController(this);
         Mic = new Audio.MicInput(settings);
+        External = new Audio.ExternalAudio(settings);
+        Atem = new Atem.AtemController(settings);
         Recording = new Recording.RecordingController(this);
 
         // 画面の数が減ったら、ペン固定を外す (SPEC.md 5 章)

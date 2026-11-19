@@ -75,6 +75,14 @@ public partial class MainWindow : Window
 
     void HelpButton_Click(object sender, RoutedEventArgs e) => ToggleShortcutList();
 
+    /// ATEM の入力ボタン: 押した入力を本番に出す。ボタンの色は、ATEM から実際に切り替わったと届いてから変える
+    void AtemInput_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.Primitives.ToggleButton { DataContext: Atem.AtemInput input } button) return;
+        button.SetCurrentValue(System.Windows.Controls.Primitives.ToggleButton.IsCheckedProperty, input.IsProgram);
+        model.Atem.Select(input.Id);
+    }
+
     /// 登録できなかったショートカットを知らせる (起動したとき・修飾キーを替えたとき)
     void ReportUnavailableShortcuts(bool changed)
     {
