@@ -93,7 +93,13 @@ public sealed class BackgroundSource : Observable, IDisposable
     /// 選んでいる背景 (空なら「なし」)。一覧から消えて選択が空になっても、覚えた ID は消さない
     public string SelectedId
     {
-        get => model.Settings.BackgroundID is { } id && Choices.Any(c => c.Id == id) ? id : "";
+        get
+        {
+            string? id = model.Settings.BackgroundID;
+            // 画面は保存した名前から探す (前の版で、訳した名前で保存していたものも)
+            if (id != null && id.StartsWith(ScreenPrefix) && model.Displays.Find(id[ScreenPrefix.Length..]) is { } d) id = ScreenPrefix + d.Name;
+            return id != null && Choices.Any(c => c.Id == id) ? id : "";
+        }
         set { if (value != null) model.Settings.BackgroundID = value.Length == 0 ? null : value; }
     }
 
@@ -101,7 +107,7 @@ public sealed class BackgroundSource : Observable, IDisposable
     {
         Choices.Clear();
         Choices.Add(new BackgroundChoice("", Loc.L("なし（透明）")));
-        foreach (var d in model.Displays.All) Choices.Add(new BackgroundChoice(ScreenPrefix + d.Name, Loc.L("画面: %@", d.Name)));
+        foreach (var d in model.Displays.All) Choices.Add(new BackgroundChoice(ScreenPrefix + d.Name, Loc.L("画面: %@", d.Label)));
         foreach (var c in cameras) Choices.Add(new BackgroundChoice(c.Id, c.Name));
         Raise(nameof(SelectedId));
     }
@@ -115,7 +121,7 @@ public sealed class BackgroundSource : Observable, IDisposable
             string name = id[ScreenPrefix.Length..];
             var display = model.Displays.Find(name);
             if (display == null) { Stop(); return; }   // その画面がつながったら始める
-            if (!restartScreen && ScreenName == name) return;
+            if (!restartScreen && ScreenName == display.Name) return;
             Stop();
             StartScreen(display);
             return;

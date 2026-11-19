@@ -248,10 +248,10 @@ public sealed partial class OverlayController : IDisposable
         var full = model.Outputs.FullDisplay;
         var canvas = model.Video.Canvas;
         var w = full == null ? null : annotations.WindowFor(full.Name);
-        byte[]? pixels = w == null || canvas == null || !w.IsVisible ? null
+        var lines = w == null || canvas == null || !w.IsVisible ? null
             : Annotations.RenderForCanvas(w, canvas.Width, canvas.Height, FadeTimes[Math.Clamp(model.Settings.PenFade, 0, 2)]);
-        model.Video.SetLayer(LayerKind.Annotation, pixels == null || canvas == null ? null
-            : new LayerImage(pixels, canvas.Width, canvas.Height, 0, 0, canvas.Width, canvas.Height));
+        model.Video.SetLayer(LayerKind.Annotation, lines is not { } l || canvas == null ? null
+            : new LayerImage(l.Pixels, l.Rect.Width, l.Rect.Height, l.Rect.X, l.Rect.Y, canvas.Width, canvas.Height));
     }
 
     /// マウスのある画面に指し棒を描く。全画面出力の画面なら、合成した映像の中に描く。
@@ -284,24 +284,36 @@ public sealed partial class OverlayController : IDisposable
         lastPointer = tip;
         pointerAngle = angle;
 
-        var start = PointerRenderer.Base(tip, angle, area);
-        var bmp = PointerRenderer.Render(start, tip, area, out var r);
+        // 絵は傾き (0.5 度きざみ) と大きさだけで決まるので、同じ間は描き直さずに位置だけ動かす
+        // (影付きの絵を 60 回/秒描き直すと、UI のスレッドが重くなるため)
+        double quantized = Math.Round(angle * 2) / 2;
+        string key = $"{quantized} {area.Height}";
+        if (key != pointerKey)
+        {
+            pointerKey = key;
+            pointerRendered = PointerRenderer.Render(quantized, area.Height);
+            pointerImage.Source = pointerRendered?.Bitmap;
+        }
+        var pr = pointerRendered;
+        int x = (int)Math.Round(tip.X) - (pr?.TipX ?? 0), y = (int)Math.Round(tip.Y) - (pr?.TipY ?? 0);
         if (onOutput)
         {
             if (pointerWindow.IsVisible) pointerWindow.Hide();
-            model.Video.SetLayer(LayerKind.Pointer, bmp == null ? null
-                : new LayerImage(Pixels(bmp), bmp.PixelWidth, bmp.PixelHeight, r.X, r.Y, canvas!.Width, canvas.Height));
+            model.Video.SetLayer(LayerKind.Pointer, pr == null ? null
+                : new LayerImage(pr.Pixels, pr.Bitmap.PixelWidth, pr.Bitmap.PixelHeight, x, y, canvas!.Width, canvas.Height));
         }
         else
         {
             model.Video.SetLayer(LayerKind.Pointer, null);
-            if (bmp == null) { pointerWindow.Hide(); return; }
+            if (pr == null) { pointerWindow.Hide(); return; }
             // ウィンドウは棒のまわりだけの大きさにして動かす (画面全体を 60 回/秒描き直さないように)
-            pointerImage.Source = bmp;
-            pointerWindow.Place(d.Left + r.X, d.Top + r.Y, bmp.PixelWidth, bmp.PixelHeight);
+            pointerWindow.Place(d.Left + x, d.Top + y, pr.Bitmap.PixelWidth, pr.Bitmap.PixelHeight);
             pointerWindow.ShowNoActivate();
         }
     }
+
+    string pointerKey = "";
+    PointerRenderer.Rendered? pointerRendered;
 
     /// 重なり順を並べ直す (奥から手前へ)
     void Arrange()

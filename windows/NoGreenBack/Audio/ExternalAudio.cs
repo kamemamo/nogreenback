@@ -15,7 +15,6 @@ using Windows.Media.Capture;
 using Windows.Media.Devices;
 using Windows.Media.MediaProperties;
 using Windows.Media.Render;
-using WinRT;
 
 namespace NoGreenBack.Audio;
 
@@ -83,7 +82,7 @@ public sealed class ExternalAudio : Observable, IDisposable
         });
 
         new DispatcherTimer(TimeSpan.FromMilliseconds(100), DispatcherPriority.Background,
-            (_, _) => Meter = Math.Clamp((Level + 60) / 2, 0, 30), dispatcher).Start();
+            (_, _) => Meter = AudioFrames.Meter(Level), dispatcher).Start();
         RefreshChoices();
     }
 
@@ -181,23 +180,14 @@ public sealed class ExternalAudio : Observable, IDisposable
 
     float[] buffer = new float[4800];
 
-    unsafe void OnQuantum(AudioGraph sender, object args)
+    void OnQuantum(AudioGraph sender, object args)
     {
-        var t = tapNode;
-        if (t == null) return;
+        var o = tapNode;
+        if (o == null) return;
         long now = Stopwatch.GetTimestamp();
-        using var frame = t.GetFrame();
-        using var buf = frame.LockBuffer(AudioBufferAccessMode.Read);
-        using var reference = buf.CreateReference();
-        reference.As<IMemoryBufferByteAccess>().GetBuffer(out byte* data, out _);
-        int n = (int)(buf.Length / sizeof(float));
+        int n = AudioFrames.Read(o, ref buffer, out double db);
         if (n <= 0) return;
-        if (buffer.Length < n) buffer = new float[n];
-        new ReadOnlySpan<float>(data, n).CopyTo(buffer);
-        double sum = 0;
-        for (int i = 0; i < n; i++) sum += buffer[i] * buffer[i];
-        double rms = Math.Sqrt(sum / n);
-        Volatile.Write(ref level, rms > 1e-8 ? 20 * Math.Log10(rms) : -160);
+        Volatile.Write(ref level, db);
         SamplesArrived?.Invoke(buffer, n, now);
     }
 
@@ -218,11 +208,5 @@ public sealed class ExternalAudio : Observable, IDisposable
         try { outputWatcher.Stop(); } catch { }
         openVersion++;
         Close();
-    }
-
-    [ComImport, Guid("5B0D3235-4DBA-4D44-865E-8F1D0E4FD04D"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    unsafe interface IMemoryBufferByteAccess
-    {
-        void GetBuffer(out byte* buffer, out uint capacity);
     }
 }

@@ -31,8 +31,9 @@ public partial class App : Application
             return;
         }
 
-        // どんな終わり方でも、指し棒で隠したカーソルを戻す
+        // どんな終わり方でも、指し棒で隠したカーソルを戻す。強制終了などで戻せなかったときは、ここで戻す
         AppDomain.CurrentDomain.ProcessExit += (_, _) => Overlays.CursorHider.Show();
+        Overlays.CursorHider.RestoreIfLeftHidden();
 
         Model = new AppModel(Settings.Load());
         MainWindow = new MainWindow(Model);

@@ -266,15 +266,17 @@ public sealed class Annotations
 
     /// 全画面出力の画面に描いた線を、合成した映像 (canvasW × canvasH) の座標に直して画像にする。
     /// 全画面出力は映像を画面に収まるように拡大して真ん中に出しているので、その逆をたどる
-    public static byte[]? RenderForCanvas(AnnotationWindow w, int canvasW, int canvasH, double fadeAfter)
+    /// 返すのは線のある範囲だけの画像と、その範囲 (キャンバスの座標)。キャンバス全体を描くと、
+    /// 描いている間 30 回/秒、キャンバスの大きさの画像を作り直すことになり重いため
+    public static (byte[] Pixels, Int32Rect Rect)? RenderForCanvas(AnnotationWindow w, int canvasW, int canvasH, double fadeAfter)
     {
         if (w.Strokes.Count == 0 || canvasW <= 0 || canvasH <= 0) return null;
         double ppd = w.PixelsPerDip;
         double s = Math.Min((double)w.Display.Width / canvasW, (double)w.Display.Height / canvasH);
         double tx = (w.Display.Width - canvasW * s) / 2, ty = (w.Display.Height - canvasH * s) / 2;
         var now = DateTime.Now;
-        var visual = new DrawingVisual();
-        using (var dc = visual.RenderOpen())
+        var group = new DrawingGroup();
+        using (var dc = group.Open())
         {
             // 画面の画素 = 論理的な単位 × ppd。映像の座標 = (画面の画素 − t) / s
             dc.PushTransform(new MatrixTransform(ppd / s, 0, 0, ppd / s, -tx / s, -ty / s));
@@ -286,10 +288,25 @@ public sealed class Annotations
             }
             dc.Pop();
         }
-        var bmp = new RenderTargetBitmap(canvasW, canvasH, 96, 96, PixelFormats.Pbgra32);
+        // 線のある範囲 (線の太さ込み) をキャンバスの中に切り詰め、画素の境目にそろえる
+        var bounds = group.Bounds;
+        bounds.Intersect(new Rect(0, 0, canvasW, canvasH));
+        if (bounds.IsEmpty) return null;
+        int x0 = (int)Math.Floor(bounds.Left), y0 = (int)Math.Floor(bounds.Top);
+        int x1 = (int)Math.Ceiling(bounds.Right), y1 = (int)Math.Ceiling(bounds.Bottom);
+        int bw = Math.Max(1, x1 - x0), bh = Math.Max(1, y1 - y0);
+
+        var visual = new DrawingVisual();
+        using (var dc = visual.RenderOpen())
+        {
+            dc.PushTransform(new TranslateTransform(-x0, -y0));
+            dc.DrawDrawing(group);
+            dc.Pop();
+        }
+        var bmp = new RenderTargetBitmap(bw, bh, 96, 96, PixelFormats.Pbgra32);
         bmp.Render(visual);
-        var pixels = new byte[canvasW * canvasH * 4];
-        bmp.CopyPixels(pixels, canvasW * 4, 0);
-        return pixels;
+        var pixels = new byte[bw * bh * 4];
+        bmp.CopyPixels(pixels, bw * 4, 0);
+        return (pixels, new Int32Rect(x0, y0, bw, bh));
     }
 }

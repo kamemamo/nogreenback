@@ -12,9 +12,10 @@ using Microsoft.Win32;
 
 namespace NoGreenBack;
 
-public sealed record DisplayInfo(string Name, string DeviceName, int Left, int Top, int Width, int Height, bool IsPrimary)
+/// Name は設定に保存する名前 (表示の言語によらない)。Label は画面に出す名前 (名前のない画面は訳した名前になる)
+public sealed record DisplayInfo(string Name, string Label, string DeviceName, int Left, int Top, int Width, int Height, bool IsPrimary)
 {
-    public override string ToString() => Name;
+    public override string ToString() => Label;
 }
 
 public sealed partial class Displays : Observable, IDisposable
@@ -65,7 +66,8 @@ public sealed partial class Displays : Observable, IDisposable
     /// 出す画面の横縦比 (映像の比率を「出す画面に合わせる」ときに使う。画面がなければ 0)
     public double OutputAspect => OutputDisplay is { Height: > 0 } d ? (double)d.Width / d.Height : 0;
 
-    public DisplayInfo? Find(string? name) => name == null ? null : All.FirstOrDefault(d => d.Name == name);
+    /// 保存した名前から画面を探す (前の版で、訳した名前で保存していたものも探せるように Label とも比べる)
+    public DisplayInfo? Find(string? name) => name == null ? null : All.FirstOrDefault(d => d.Name == name) ?? All.FirstOrDefault(d => d.Label == name);
 
     void Refresh()
     {
@@ -94,13 +96,16 @@ public sealed partial class Displays : Observable, IDisposable
         for (int i = 0; i < ordered.Count; i++)
         {
             var m = ordered[i];
-            string name = names.TryGetValue(m.Device, out var n) && n.Name.Length > 0 ? n.Name
-                        : names.TryGetValue(m.Device, out n) && n.Internal ? Loc.L("内蔵ディスプレイ")
-                        : Loc.L("画面 %d", i + 1);
+            // モニターの名前がなければ、保存する名前は言語によらない決まった名前にし、画面に出す名前だけ訳す
+            // (表示の言語を変えても、覚えた画面がわかるように)
+            bool hasName = names.TryGetValue(m.Device, out var n) && n.Name.Length > 0;
+            bool isInternal = names.TryGetValue(m.Device, out n) && n.Internal;
+            string name = hasName ? n.Name : isInternal ? "Built-in Display" : $"Display {i + 1}";
+            string label = hasName ? n.Name : isInternal ? Loc.L("内蔵ディスプレイ") : Loc.L("画面 %d", i + 1);
             // 同じ名前の画面が並ぶときは (2)、(3) を付ける
-            string unique = name;
-            for (int k = 2; result.Any(r => r.Name == unique); k++) unique = $"{name} ({k})";
-            result.Add(new DisplayInfo(unique, m.Device, m.Rect.Left, m.Rect.Top,
+            string unique = name, uniqueLabel = label;
+            for (int k = 2; result.Any(r => r.Name == unique); k++) { unique = $"{name} ({k})"; uniqueLabel = $"{label} ({k})"; }
+            result.Add(new DisplayInfo(unique, uniqueLabel, m.Device, m.Rect.Left, m.Rect.Top,
                 m.Rect.Right - m.Rect.Left, m.Rect.Bottom - m.Rect.Top, m.Primary));
         }
         return result;

@@ -39,8 +39,9 @@ public sealed class SubtitleController : Observable, IDisposable
     /// 操作ウィンドウに出すお知らせ (モデルのダウンロード中など。空なら出さない)
     public string Message { get => message; private set => Set(ref message, value); }
 
-    /// 字幕のウィンドウ (録画や背景の画面の取り込みから外すため)
-    public IntPtr WindowHwnd => window.IsVisible ? window.Hwnd : IntPtr.Zero;
+    /// 字幕のウィンドウ (録画や背景の画面の取り込みから外すため)。
+    /// 隠れている間も同じウィンドウを返す (録画を止めたときに隠れていても、取り込みから外す指定を戻せるように)
+    public IntPtr WindowHwnd => window.Hwnd;
 
     public SubtitleController(AppModel model)
     {

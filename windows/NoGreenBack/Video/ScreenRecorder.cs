@@ -35,8 +35,6 @@ public sealed class ScreenRecorder : IDisposable
     readonly IMFSinkWriter writer;
     readonly int videoStream, audioStream = -1;
     readonly GpuImage source = new();
-    readonly GpuTarget[] ring;
-    int ringIndex;
     readonly int outW, outH, fps;
     readonly MicInput? mic;
     readonly string tempPath;
@@ -57,6 +55,9 @@ public sealed class ScreenRecorder : IDisposable
     public int FrameCount { get; private set; }
     public long AudioSamples { get; private set; }
     public bool HasAudio => audioStream >= 0;
+
+    /// 音はマイクではなく外部の音声だけから録っている (マイクが「なし」のとき)
+    public bool ExternalOnly => externalOnly;
 
     /// 書き出し中の、断片化した MP4 のパス
     public string TempPath => tempPath;
@@ -89,7 +90,6 @@ public sealed class ScreenRecorder : IDisposable
         double scale = options.LongSide > 0 ? Math.Min(1, (double)options.LongSide / Math.Max(display.Width, display.Height)) : 1;
         outW = Math.Max(2, (int)Math.Round(display.Width * scale / 2) * 2);
         outH = Math.Max(2, (int)Math.Round(display.Height * scale / 2) * 2);
-        ring = Enumerable.Range(0, 8).Select(_ => new GpuTarget()).ToArray();
 
         MediaFactory.MFStartup().CheckError();
         deviceManager = MediaFactory.MFCreateDXGIDeviceManager();
@@ -190,8 +190,10 @@ public sealed class ScreenRecorder : IDisposable
 
             // コマを写して、出力の大きさに縮める
             using (var tex = CaptureInterop.GetTexture(frame)) source.CopyFrom(gpu, tex, size.Width, size.Height);
-            var target = ring[ringIndex];
-            ringIndex = (ringIndex + 1) % ring.Length;
+            // コマごとに新しいテクスチャに描く。エンコーダーはサンプルを持ったまま後で読むことがあるので、
+            // 使い回すと、読み終わる前に次のコマで上書きしてしまうおそれがある。
+            // こちらの参照はサンプルを作ったらすぐ放し、テクスチャはエンコーダーがサンプルを放したときに消える
+            using var target = new GpuTarget();
             target.Ensure(gpu, outW, outH);
             gpu.CopyForSpout(target.Rtv!, outW, outH, source.Srv!, flip: false, straightAlpha: false);
 
@@ -346,7 +348,6 @@ public sealed class ScreenRecorder : IDisposable
         Stop();
         writer.Dispose();
         deviceManager.Dispose();
-        foreach (var t in ring) t.Dispose();
         source.Dispose();
         gpu.Dispose();
     }

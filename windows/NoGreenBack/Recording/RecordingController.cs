@@ -60,7 +60,7 @@ public sealed partial class RecordingController : Observable, IDisposable
     /// 選んでいる「録画する画面」(空は「表示する画面と同じ」)
     public string SelectedDisplayId
     {
-        get => model.Settings.RecordScreen is { } n && model.Displays.Find(n) != null ? n : "";
+        get => model.Displays.Find(model.Settings.RecordScreen)?.Name ?? "";
         set { if (value != null) model.Settings.RecordScreen = value.Length == 0 ? null : value; }
     }
 
@@ -71,7 +71,7 @@ public sealed partial class RecordingController : Observable, IDisposable
     {
         DisplayChoices.Clear();
         DisplayChoices.Add(new RecordDisplayChoice("", Loc.L("表示する画面と同じ")));
-        foreach (var d in model.Displays.All) DisplayChoices.Add(new RecordDisplayChoice(d.Name, d.Name));
+        foreach (var d in model.Displays.All) DisplayChoices.Add(new RecordDisplayChoice(d.Name, d.Label));
         Raise(nameof(SelectedDisplayId));
     }
 
@@ -141,7 +141,7 @@ public sealed partial class RecordingController : Observable, IDisposable
         model.State.ElapsedText = Loc.L("保存中…");
         ClosePanel();
         string? saved = null;
-        bool noFrames = false, noAudio = false;
+        bool noFrames = false, noAudio = false, externalOnly = rec.ExternalOnly;
         var subtitles = model.Subtitles;
         string trackLanguage = subtitles.TrackLanguage;
         try
@@ -166,9 +166,11 @@ public sealed partial class RecordingController : Observable, IDisposable
                 }
                 catch (Exception e)
                 {
-                    // 詰め替えに失敗したら、断片化した方を残す (そのままでも再生できる)
+                    // 詰め替えに失敗したら、断片化した方を残す (そのままでも再生できる)。
+                    // 字幕は .srt だけ作る (断片化した MP4 には字幕トラックを足せないため)
                     Log.Write($"録画を MP4 に詰め替えられません: {e.Message}");
                     TryDelete(finalPath);
+                    WriteSrt(rec.TempPath, cues);
                     return (rec.TempPath, false, silent);
                 }
             });
@@ -202,7 +204,10 @@ public sealed partial class RecordingController : Observable, IDisposable
         else if (saved != null)
         {
             if (noAudio)
-                MessageBox.Show(Loc.L("マイクの音が届いていなかったため、録画には音が入っていません。\n「マイク」の選択と、右のメーターが動くかを確かめてください。"), "NoGreenBack", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(externalOnly
+                    ? Loc.L("外部の音声が届いていなかったため、録画には音が入っていません。\n「外部の音声」の「入力」の選択と、右のメーターが動くかを確かめてください。")
+                    : Loc.L("マイクの音が届いていなかったため、録画には音が入っていません。\n「マイク」の選択と、右のメーターが動くかを確かめてください。"),
+                    "NoGreenBack", MessageBoxButton.OK, MessageBoxImage.Information);
             try { Process.Start("explorer.exe", $"/select,\"{saved}\""); } catch { }
         }
     }
@@ -220,6 +225,18 @@ public sealed partial class RecordingController : Observable, IDisposable
             File.WriteAllText(Path.ChangeExtension(mp4, ".srt"), Speech.SubtitleText.Srt(cues), new System.Text.UTF8Encoding(false));
             Speech.Mp4SubtitleTrack.Append(mp4, cues, language);
             Log.Write($"録画: 字幕 {cues.Count} 文を .srt と字幕トラックに書きました");
+        }
+        catch (Exception e) { Log.Write($"録画の字幕を書けません: {e.Message}"); }
+    }
+
+    /// 録画と同じ名前の .srt だけを作る (MP4 に詰め替えられず、断片化した方を残したとき)
+    static void WriteSrt(string mp4, List<Speech.SubtitleCue> cues)
+    {
+        if (cues.Count == 0) return;
+        try
+        {
+            File.WriteAllText(Path.ChangeExtension(mp4, ".srt"), Speech.SubtitleText.Srt(cues), new System.Text.UTF8Encoding(false));
+            Log.Write($"録画: 字幕 {cues.Count} 文を .srt に書きました");
         }
         catch (Exception e) { Log.Write($"録画の字幕を書けません: {e.Message}"); }
     }
