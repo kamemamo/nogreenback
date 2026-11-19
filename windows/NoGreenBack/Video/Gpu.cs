@@ -1,7 +1,7 @@
 // Direct3D 11 での合成と表示 (SPEC.md 4 章)
 // - カメラのコマをテクスチャに上げ、キャンバス (合成した映像) に人物を置く
 // - キャンバスを、プレビューなどのスワップチェーンに縦横比を保って描く (透明な部分は市松模様、余白は黒)
-// いまは人物の切り抜きがないので、カメラの映像をそのまま「人物」として置いている。
+// - ワイプは、キャンバスを通さずに人物だけを透明なスワップチェーン (DirectComposition) に描く
 // ここで使うものは、すべて Pipeline の lock の中から呼ぶ (Direct3D の immediate context は 1 つのスレッドからしか使えない)。
 
 using System.Numerics;
@@ -9,6 +9,7 @@ using System.Runtime.InteropServices;
 using Vortice.D3DCompiler;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
+using Vortice.DirectComposition;
 using Vortice.DXGI;
 using Vortice.Mathematics;
 
@@ -154,8 +155,14 @@ public sealed class Gpu : IDisposable
     public void Compose(int canvasW, int canvasH, Vector4 personRect, bool mirror, bool showPerson, float gain)
     {
         EnsureCanvas(canvasW, canvasH);
-        Context.OMSetRenderTargets(canvasRtv!);
-        Context.RSSetViewport(new Viewport(0, 0, canvasW, canvasH));
+        DrawPerson(canvasRtv!, canvasW, canvasH, personRect, mirror, showPerson, gain);
+    }
+
+    /// target 全体を透明にして、人物を personRect に描く
+    public void DrawPerson(ID3D11RenderTargetView target, int targetW, int targetH, Vector4 personRect, bool mirror, bool showPerson, float gain)
+    {
+        Context.OMSetRenderTargets(target);
+        Context.RSSetViewport(new Viewport(0, 0, targetW, targetH));
         Context.PSSetShaderResource(1, hasMask ? maskSrv! : null!);
         Draw(psComposite, cameraSrv, new ShaderParams
         {
@@ -221,23 +228,27 @@ public sealed class Gpu : IDisposable
     }
 }
 
-/// ウィンドウ (HWND) に描くためのスワップチェーン
+/// ウィンドウ (HWND) に描くためのスワップチェーン。
+/// transparent なら DirectComposition でウィンドウに付け、透明な部分から後ろが透けて見えるようにする (プリマルチプライドα)
 public sealed class SwapChainTarget : IDisposable
 {
     readonly Gpu gpu;
     readonly IDXGISwapChain1 swapChain;
+    readonly IDCompositionDevice? dcomp;
+    readonly IDCompositionTarget? dcompTarget;
+    readonly IDCompositionVisual? dcompVisual;
     ID3D11RenderTargetView? rtv;
     public int Width { get; private set; }
     public int Height { get; private set; }
 
-    public SwapChainTarget(Gpu gpu, IntPtr hwnd, int width, int height)
+    public SwapChainTarget(Gpu gpu, IntPtr hwnd, int width, int height, bool transparent = false)
     {
         this.gpu = gpu;
         Width = Math.Max(1, width); Height = Math.Max(1, height);
         using var dxgiDevice = gpu.Device.QueryInterface<IDXGIDevice>();
         using var adapter = dxgiDevice.GetAdapter();
         using var factory = adapter.GetParent<IDXGIFactory2>();
-        swapChain = factory.CreateSwapChainForHwnd(gpu.Device, hwnd, new SwapChainDescription1
+        var desc = new SwapChainDescription1
         {
             Width = (uint)Width, Height = (uint)Height,
             Format = Format.B8G8R8A8_UNorm,
@@ -246,9 +257,23 @@ public sealed class SwapChainTarget : IDisposable
             SampleDescription = new SampleDescription(1, 0),
             SwapEffect = SwapEffect.FlipDiscard,
             Scaling = Scaling.Stretch,
-            AlphaMode = AlphaMode.Ignore,
-        });
-        factory.MakeWindowAssociation(hwnd, WindowAssociationFlags.IgnoreAltEnter);
+            AlphaMode = transparent ? AlphaMode.Premultiplied : AlphaMode.Ignore,
+        };
+        if (transparent)
+        {
+            swapChain = factory.CreateSwapChainForComposition(gpu.Device, desc, null);
+            dcomp = DComp.DCompositionCreateDevice<IDCompositionDevice>(dxgiDevice);
+            dcomp.CreateTargetForHwnd(hwnd, true, out dcompTarget).CheckError();
+            dcomp.CreateVisual(out dcompVisual).CheckError();
+            dcompVisual!.SetContent(swapChain).CheckError();
+            dcompTarget!.SetRoot(dcompVisual).CheckError();
+            dcomp.Commit().CheckError();
+        }
+        else
+        {
+            swapChain = factory.CreateSwapChainForHwnd(gpu.Device, hwnd, desc);
+            factory.MakeWindowAssociation(hwnd, WindowAssociationFlags.IgnoreAltEnter);
+        }
         CreateRtv();
     }
 
@@ -278,9 +303,20 @@ public sealed class SwapChainTarget : IDisposable
         swapChain.Present(0, PresentFlags.None);
     }
 
+    /// target 全体を透明にして人物だけを描き、画面に出す (ワイプ)
+    public void PresentPerson(Vector4 personRect, bool mirror, bool showPerson, float gain)
+    {
+        if (rtv == null) return;
+        gpu.DrawPerson(rtv, Width, Height, personRect, mirror, showPerson, gain);
+        swapChain.Present(0, PresentFlags.None);
+    }
+
     public void Dispose()
     {
         rtv?.Dispose();
+        dcompVisual?.Dispose();
+        dcompTarget?.Dispose();
+        dcomp?.Dispose();
         swapChain.Dispose();
     }
 }

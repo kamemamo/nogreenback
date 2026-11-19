@@ -7,13 +7,24 @@ public sealed class AppModel
     public Settings Settings { get; }
     public AppState State { get; } = new();
 
+    /// 画面の一覧
+    public Displays Displays { get; }
+
     /// 映像の処理 (カメラ・合成・表示)
     public Video.Pipeline Video { get; }
+
+    /// 全画面出力とワイプのウィンドウ
+    public Video.OutputWindows Outputs { get; }
 
     public AppModel(Settings settings)
     {
         Settings = settings;
+        Displays = new Displays(settings);
         Video = new Video.Pipeline(this);
+        Outputs = new Video.OutputWindows(this);
+
+        // 画面の数が減ったら、ペン固定を外す (SPEC.md 5 章)
+        Displays.Changed += fewer => { if (fewer) State.PenLock = false; };
 
         State.PropertyChanged += (_, e) =>
         {

@@ -204,7 +204,8 @@
                     </DockPanel>
                     <DockPanel Style="{StaticResource Row}">
                         <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 表示する画面}"/>
-                        <ComboBox IsEnabled="False" ToolTip="{l:L まだ作っていません}"/>
+                        <ComboBox ItemsSource="{Binding Displays.All}" SelectedItem="{Binding Displays.OverlayDisplay}"
+                                  ToolTip="{l:L ワイプを出す画面}"/>
                     </DockPanel>
 
                     <!-- 背景と全画面出力 -->
@@ -215,7 +216,8 @@
                     </DockPanel>
                     <DockPanel Style="{StaticResource Row}">
                         <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 出す画面}"/>
-                        <ComboBox IsEnabled="False" ToolTip="{l:L まだ作っていません}"/>
+                        <ComboBox ItemsSource="{Binding Displays.All}" SelectedItem="{Binding Displays.OutputDisplay}"
+                                  ToolTip="{l:L 全画面出力を出す画面}"/>
                     </DockPanel>
                     <DockPanel Style="{StaticResource Row}">
                         <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 映像の比率}"/>

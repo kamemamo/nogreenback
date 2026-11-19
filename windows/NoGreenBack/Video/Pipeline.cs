@@ -17,11 +17,15 @@ public sealed class Pipeline : Observable, IDisposable
     readonly DispatcherTimer fpsTimer;
 
     SwapChainTarget? preview;
+    SwapChainTarget? fullScreen;
+    SwapChainTarget? overlay;
     bool disposed;
     bool previewVisible = true;
 
     // 最後に受け取ったカメラの大きさ (最初は 1920×1080)
     int cameraW = 1920, cameraH = 1080;
+    // 出す画面の横縦比 (UI のスレッドで書き、合成で読む。0 なら画面がない)
+    double outputAspect;
     int composedCount;
     long lastFpsTicks = Environment.TickCount64;
 
@@ -57,6 +61,12 @@ public sealed class Pipeline : Observable, IDisposable
             model.State.FpsText = $"{fps:F1} fps";
         }, Dispatcher.CurrentDispatcher);
         fpsTimer.Start();
+
+        outputAspect = model.Displays.OutputAspect;
+        model.Displays.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(Displays.OutputAspect)) outputAspect = model.Displays.OutputAspect;
+        };
 
         Message = modelsDir == null ? Loc.L("切り抜きのモデルが見つかりません (windows\\models\\download.ps1 を実行してください)") : "";
         model.State.PropertyChanged += (_, e) =>
@@ -132,8 +142,10 @@ public sealed class Pipeline : Observable, IDisposable
     {
         var s = model.Settings;
 
-        // キャンバス: 高さはカメラと同じ。横幅は、いまはカメラと同じ (「出す画面に合わせる」は画面の一覧を作ってから)
-        int canvasW = cameraW, canvasH = cameraH;
+        // キャンバス: 高さはカメラと同じ。横幅は「出す画面に合わせる」なら 高さ × 出す画面の横縦比 (偶数に丸める)、でなければカメラと同じ
+        int canvasH = cameraH;
+        double aspect = outputAspect;
+        int canvasW = s.MatchOutputAspect && aspect > 0 ? Math.Max(2, (int)Math.Round(canvasH * aspect / 2) * 2) : cameraW;
 
         // 人物の置き方: 大きさの割合をカメラの幅と高さの両方に掛け、選んだ隅にぴったり付ける (4 章)
         float pw = (float)(cameraW * s.OverlayScale), ph = (float)(cameraH * s.OverlayScale);
@@ -145,6 +157,46 @@ public sealed class Pipeline : Observable, IDisposable
         Interlocked.Increment(ref composedCount);
 
         if (preview != null && previewVisible) preview.Present(checkerboard: true);
+        fullScreen?.Present(checkerboard: false);
+        PresentOverlay(s.PersonOn && hasCamera);
+    }
+
+    /// ワイプ: 背景なしの切り抜きを幅に収まるように縮め、下端をウィンドウの下にそろえる (はみ出した上は切れる)
+    void PresentOverlay(bool showPerson)
+    {
+        if (overlay == null) return;
+        float w = overlay.Width, h = w * cameraH / cameraW;
+        overlay.PresentPerson(new Vector4(0, overlay.Height - h, w, h), model.Settings.Mirror, showPerson, gain);
+    }
+
+    /// 全画面出力のウィンドウができた (null なら閉じた)。ウィンドウを閉じる前に呼ぶ
+    public void SetFullScreenWindow(IntPtr hwnd, int width, int height)
+    {
+        lock (gate)
+        {
+            fullScreen?.Dispose();
+            fullScreen = null;
+            if (disposed || hwnd == IntPtr.Zero) return;
+            fullScreen = new SwapChainTarget(gpu, hwnd, width, height);
+            if (gpu.CanvasSrv != null) fullScreen.Present(checkerboard: false);
+        }
+    }
+
+    /// ワイプのウィンドウができた・大きさが変わった (hwnd が 0 なら閉じた)。ウィンドウを閉じる前に呼ぶ
+    public void SetOverlayWindow(IntPtr hwnd, int width, int height)
+    {
+        lock (gate)
+        {
+            if (hwnd == IntPtr.Zero || disposed)
+            {
+                overlay?.Dispose();
+                overlay = null;
+                return;
+            }
+            if (overlay == null) overlay = new SwapChainTarget(gpu, hwnd, width, height, transparent: true);
+            else overlay.Resize(width, height);
+            PresentOverlay(model.Settings.PersonOn && Camera.MillisecondsSinceLastFrame < 500);
+        }
     }
 
     /// プレビューの子ウィンドウができた・大きさが変わった
@@ -178,6 +230,10 @@ public sealed class Pipeline : Observable, IDisposable
             segmenter = null;
             preview?.Dispose();
             preview = null;
+            fullScreen?.Dispose();
+            fullScreen = null;
+            overlay?.Dispose();
+            overlay = null;
             gpu.Dispose();
         }
     }

@@ -11,3 +11,7 @@
 "カメラへのアクセスが許可されていません。\n設定 > プライバシーとセキュリティ > カメラ で、「デスクトップ アプリがカメラにアクセスできるようにする」をオンにしてください。" = "Camera access isn't allowed.\nIn Settings > Privacy & security > Camera, turn on \"Let desktop apps access your camera\".";
 "エラーが起きたため終了します: %@" = "NoGreenBack quit because of an error: %@";
 "切り抜きのモデルが見つかりません (windows\models\download.ps1 を実行してください)" = "Segmentation models not found (run windows\models\download.ps1)";
+"ワイプを出す画面" = "The display to show the PiP on";
+"全画面出力を出す画面" = "The display for full-screen output";
+"内蔵ディスプレイ" = "Built-in Display";
+"画面 %d" = "Display %d";
