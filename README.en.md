@@ -141,6 +141,20 @@ Turn on **Subtitles** (⌃⌥⌘ S) to turn your speech into subtitles on your M
 - **When recording**, subtitles aren't burned into the picture. They're saved as a subtitle track inside the .mp4 and as a .srt file with the same name. When you record the full-screen output, the subtitles in it are recorded.
 - Works best on macOS 26 or later (earlier versions need Dictation turned on). The first time, recognition data for the language is downloaded and Microphone and Speech Recognition permissions are needed.
 
+### Using a single screen
+
+With one monitor (a MacBook on its own, for example), don't use Full Screen; overlay everything directly on your screen.
+
+- **Person**: turn on PiP to show the person in a corner of the screen.
+- **Drawing**: turn on Draw and Whiteboard. The board covers the whole screen, with the person in front of it and your drawings in front of that. Clicks go through the board, so you can keep using your slides and other apps.
+- **Recording**: leave "Screen to record" as "Same as display screen". The board, person, keyboard and drawings are all recorded (subtitles are saved separately as a .srt file).
+- **Zoom or Teams**: share your entire screen and others see the same view.
+
+Notes:
+
+- On a single screen, Full Screen covers everything, including the menu bar and Dock, and takes your clicks, so you can't use the apps behind it (close it with Esc or ⌃⌥⌘ F). Full Screen is for sending the video to a second screen, such as a projector or an external monitor.
+- The NoGreenBack window also ends up under the translucent board. You can still click it, but it looks faded. While recording, the window goes to the Dock and comes back when you stop.
+
 ### Shortcuts (for Stream Deck)
 
 These work even while other apps are in front. In Stream Deck, assign them to a Hotkey action.
