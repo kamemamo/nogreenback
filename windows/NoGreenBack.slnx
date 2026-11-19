@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/Tools/">
     <Project Path="Tools/SegBench/SegBench.csproj" />
+    <Project Path="Tools/SpoutCheck/SpoutCheck.csproj" />
   </Folder>
   <Project Path="NoGreenBack/NoGreenBack.csproj" />
 </Solution>

@@ -29,6 +29,8 @@ public sealed class Pipeline : Observable, IDisposable
     SwapChainTarget? preview;
     SwapChainTarget? fullScreen;
     SwapChainTarget? overlay;
+    SpoutSender? spout;
+    readonly GpuTarget spoutPerson = new();   // 背景がないときに Spout へ送る、元の大きさの人物
     bool disposed;
     bool previewVisible = true;
 
@@ -87,6 +89,8 @@ public sealed class Pipeline : Observable, IDisposable
         Camera = new CameraCapture(model.Settings);
         Camera.FrameArrived += OnCameraFrame;
         Background = new BackgroundSource(model, gpu, gate, Camera);
+        try { spout = new SpoutSender(gpu, "NoGreenBack"); }
+        catch (Exception e) { Log.Write($"Spout で送れません: {e.Message}"); }
 
         idleTimer = new Timer(_ => OnIdleTick(), null, 40, 40);
 
@@ -217,8 +221,31 @@ public sealed class Pipeline : Observable, IDisposable
         }
 
         bool hasCamera = Camera.MillisecondsSinceLastFrame < 500;
+        var background = Background.Pull();
         gpu.Compose(canvasW, canvasH, personRect, s.Mirror, s.PersonOn && hasCamera, gain, Volatile.Read(ref boardOpacity), layers,
-            Background.Pull());
+            background);
+
+        // Spout: 背景があれば合成と同じものを送る。なければ人物を元の大きさのまま (隅に縮めずに) 送り、受け取る側で自由に置けるようにする
+        // (板・キーボード・手書き・指し棒は入れない。字幕は作ったら下の中央に入れる)
+        if (spout != null)
+        {
+            try
+            {
+                if (background != null) spout.Send(gpu.CanvasSrv!, canvasW, canvasH, s.FlipVertical, s.StraightAlpha);
+                else
+                {
+                    spoutPerson.Ensure(gpu, cameraW, cameraH);
+                    gpu.DrawPerson(spoutPerson.Rtv!, cameraW, cameraH, new Vector4(0, 0, cameraW, cameraH), s.Mirror, s.PersonOn && hasCamera, gain);
+                    spout.Send(spoutPerson.Srv!, cameraW, cameraH, s.FlipVertical, s.StraightAlpha);
+                }
+            }
+            catch (Exception e)
+            {
+                Log.Write($"Spout で送れません: {e.Message}");
+                spout.Dispose();
+                spout = null;
+            }
+        }
         Interlocked.Increment(ref composedCount);
 
         if (preview != null && previewVisible) preview.Present(checkerboard: true);
@@ -301,6 +328,9 @@ public sealed class Pipeline : Observable, IDisposable
             overlay?.Dispose();
             overlay = null;
             foreach (var img in layerImages) img.Dispose();
+            spout?.Dispose();
+            spout = null;
+            spoutPerson.Dispose();
             gpu.Dispose();
         }
     }

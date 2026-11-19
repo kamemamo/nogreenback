@@ -32,6 +32,7 @@ public sealed class Gpu : IDisposable
     // PSPresent: 縦横比を保って置き、透明な部分だけ市松模様 (明るい灰 0.8 と暗い灰 0.55)、外は黒
     // PSFill: p1 の色で塗る (ホワイトボードの板。プリマルチプライドα)
     // PSImage: 画像 (プリマルチプライドα) を rect に置く。外は何もしない
+    // PSSpout: Spout に送る映像を写す。p0.x が 1 なら上下反転、p0.y が 1 ならストレートα (rgb を α で割る)
     // PSOpaque: 背景映像を rect に不透明で置く (機器によってはαが 0 で届くので、αは使わない)。外は何もしない
     const string Shaders = """
         cbuffer Params : register(b0) { float4 rect; float4 p0; float4 p1; };
@@ -71,6 +72,15 @@ public sealed class Gpu : IDisposable
             return tex.Sample(smp, q);
         }
 
+        float4 PSSpout(VO i) : SV_Target
+        {
+            float2 q = i.pos.xy / rect.zw;
+            if (p0.x > 0.5) q.y = 1 - q.y;
+            float4 c = tex.Sample(smp, q);
+            if (p0.y > 0.5 && c.a > 0) c.rgb = saturate(c.rgb / c.a);
+            return c;
+        }
+
         float4 PSOpaque(VO i) : SV_Target
         {
             float2 q = (i.pos.xy - rect.xy) / rect.zw;
@@ -94,7 +104,7 @@ public sealed class Gpu : IDisposable
     public ID3D11DeviceContext Context { get; }
 
     readonly ID3D11VertexShader vs;
-    readonly ID3D11PixelShader psComposite, psPresent, psFill, psImage, psOpaque;
+    readonly ID3D11PixelShader psComposite, psPresent, psFill, psImage, psOpaque, psSpout;
     readonly ID3D11SamplerState sampler;
     readonly ID3D11BlendState blendOver;   // プリマルチプライドαで上に重ねる
     readonly ID3D11Buffer paramsBuffer;
@@ -127,6 +137,7 @@ public sealed class Gpu : IDisposable
         psFill = Device.CreatePixelShader(Compile("PSFill", "ps_5_0"));
         psImage = Device.CreatePixelShader(Compile("PSImage", "ps_5_0"));
         psOpaque = Device.CreatePixelShader(Compile("PSOpaque", "ps_5_0"));
+        psSpout = Device.CreatePixelShader(Compile("PSSpout", "ps_5_0"));
         // 画面の取り込み (Windows.Graphics.Capture) が別のスレッドからもこのデバイスを使うので、守りを付ける
         using (var mt = Context.QueryInterface<ID3D11Multithread>()) mt.SetMultithreadProtected(true);
         sampler = Device.CreateSamplerState(SamplerDescription.LinearClamp);
@@ -233,6 +244,15 @@ public sealed class Gpu : IDisposable
         Context.OMSetRenderTargets((ID3D11RenderTargetView)null!);
     }
 
+    /// source を target (同じ大きさ) に写す。flip なら上下反転、straightAlpha ならプリマルチプライドからストレートαに直す
+    public void CopyForSpout(ID3D11RenderTargetView target, int width, int height, ID3D11ShaderResourceView source, bool flip, bool straightAlpha)
+    {
+        Context.OMSetRenderTargets(target);
+        Context.RSSetViewport(new Viewport(0, 0, width, height));
+        Draw(psSpout, source, new ShaderParams { Rect = new Vector4(0, 0, width, height), P0 = new Vector4(flip ? 1 : 0, straightAlpha ? 1 : 0, 0, 0) });
+        Context.OMSetRenderTargets((ID3D11RenderTargetView)null!);
+    }
+
     /// キャンバスを target に、縦横比を保って描く
     public void Present(ID3D11RenderTargetView target, int targetW, int targetH, bool checkerboard)
     {
@@ -283,8 +303,39 @@ public sealed class Gpu : IDisposable
         cameraSrv?.Dispose(); cameraTex?.Dispose();
         maskSrv?.Dispose(); maskTex?.Dispose();
         paramsBuffer.Dispose(); sampler.Dispose(); blendOver.Dispose();
-        psOpaque.Dispose(); psImage.Dispose(); psFill.Dispose(); psPresent.Dispose(); psComposite.Dispose(); vs.Dispose();
+        psSpout.Dispose(); psOpaque.Dispose(); psImage.Dispose(); psFill.Dispose(); psPresent.Dispose(); psComposite.Dispose(); vs.Dispose();
         Context.Dispose(); Device.Dispose();
+    }
+}
+
+/// 描き込めるテクスチャ (BGRA)
+public sealed class GpuTarget : IDisposable
+{
+    ID3D11Texture2D? texture;
+    public ID3D11RenderTargetView? Rtv { get; private set; }
+    public ID3D11ShaderResourceView? Srv { get; private set; }
+    public int Width { get; private set; }
+    public int Height { get; private set; }
+
+    public void Ensure(Gpu gpu, int width, int height)
+    {
+        if (texture != null && Width == width && Height == height) return;
+        Dispose();
+        texture = gpu.Device.CreateTexture2D(new Texture2DDescription
+        {
+            Width = (uint)width, Height = (uint)height, MipLevels = 1, ArraySize = 1,
+            Format = Format.B8G8R8A8_UNorm, SampleDescription = new SampleDescription(1, 0),
+            Usage = ResourceUsage.Default, BindFlags = BindFlags.ShaderResource | BindFlags.RenderTarget,
+        });
+        Rtv = gpu.Device.CreateRenderTargetView(texture);
+        Srv = gpu.Device.CreateShaderResourceView(texture);
+        Width = width; Height = height;
+    }
+
+    public void Dispose()
+    {
+        Srv?.Dispose(); Rtv?.Dispose(); texture?.Dispose();
+        Srv = null; Rtv = null; texture = null;
     }
 }
 

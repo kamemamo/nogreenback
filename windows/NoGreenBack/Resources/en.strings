@@ -15,3 +15,4 @@
 "全画面出力を出す画面" = "The display for full-screen output";
 "内蔵ディスプレイ" = "Built-in Display";
 "画面 %d" = "Display %d";
+"Spout で受け取った側で上下が逆になるときにオンにします" = "Turn on if the image arrives upside down in the Spout receiver";

@@ -152,7 +152,8 @@
                     </DockPanel>
                     <WrapPanel Margin="0,4,0,0">
                         <CheckBox Content="{l:L 左右反転}" IsChecked="{Binding Settings.Mirror}"/>
-                        <CheckBox Content="{l:L 上下反転}" IsChecked="{Binding Settings.FlipVertical}"/>
+                        <CheckBox Content="{l:L 上下反転}" IsChecked="{Binding Settings.FlipVertical}"
+                                  ToolTip="{l:L Spout で受け取った側で上下が逆になるときにオンにします}"/>
                         <CheckBox Content="{l:L ストレートα}" IsChecked="{Binding Settings.StraightAlpha}"
                                   ToolTip="{l:L 'オフ: プリマルチプライドα (既定) / オン: ストレートα。受信側で縁が黒くなる・白くなる場合に切り替え'}"/>
                     </WrapPanel>

@@ -48,7 +48,9 @@ public sealed class Settings : Observable
 
     bool mirror = true;
     [JsonPropertyName("mirror")] public bool Mirror { get => mirror; set => Set(ref mirror, value); }
-    bool flipVertical = true;
+    /// Spout に送る映像を上下反転する。Direct3D のテクスチャは上から下に並ぶので、Windows では既定でオフ
+    /// (Mac の Syphon は OpenGL で下から上なので、Mac 版の既定はオン。SPEC.md 17 章)
+    bool flipVertical;
     [JsonPropertyName("flipVertical")] public bool FlipVertical { get => flipVertical; set => Set(ref flipVertical, value); }
     bool straightAlpha;
     [JsonPropertyName("straightAlpha")] public bool StraightAlpha { get => straightAlpha; set => Set(ref straightAlpha, value); }
