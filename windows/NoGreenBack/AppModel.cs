@@ -31,6 +31,9 @@ public sealed class AppModel
     /// 画面録画
     public Recording.RecordingController Recording { get; }
 
+    /// 字幕
+    public Speech.SubtitleController Subtitles { get; }
+
     public AppModel(Settings settings)
     {
         Settings = settings;
@@ -42,6 +45,7 @@ public sealed class AppModel
         External = new Audio.ExternalAudio(settings);
         Atem = new Atem.AtemController(settings);
         Recording = new Recording.RecordingController(this);
+        Subtitles = new Speech.SubtitleController(this);
 
         // 画面の数が減ったら、ペン固定を外す (SPEC.md 5 章)
         Displays.Changed += fewer => { if (fewer) State.PenLock = false; };

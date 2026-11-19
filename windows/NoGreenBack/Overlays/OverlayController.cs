@@ -306,7 +306,8 @@ public sealed partial class OverlayController : IDisposable
     /// 重なり順を並べ直す (奥から手前へ)
     void Arrange()
     {
-        var order = new List<IntPtr> { boardWindow.Hwnd, model.Outputs.WipeHwnd, keyboardWindow.Hwnd, model.Outputs.FullHwnd };
+        // 字幕はキーボードと同じ高さ (ワイプの 1 つ上)
+        var order = new List<IntPtr> { boardWindow.Hwnd, model.Outputs.WipeHwnd, keyboardWindow.Hwnd, model.Subtitles?.WindowHwnd ?? IntPtr.Zero, model.Outputs.FullHwnd };
         order.AddRange(annotations.Windows.Select(w => w.Hwnd));
         order.Add(pointerWindow.Hwnd);
         order.Add(model.Recording?.PanelHwnd ?? IntPtr.Zero);   // 録画停止のパネルはいちばん手前
@@ -317,8 +318,8 @@ public sealed partial class OverlayController : IDisposable
     readonly Dictionary<IntPtr, bool> excludedNow = [];
 
     /// 画面の取り込み (背景の画面・録画) から、このアプリのウィンドウを外す (SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE))。
-    /// - 録画中: 操作ウィンドウ・録画停止のパネル・全画面出力の画面の手書き (線は全画面出力の映像に入っているので二重にしない)
-    /// - 画面を背景にしている間: その画面の上にある、操作ウィンドウ・ワイプ・全画面出力・キーボード・指し棒・録画停止のパネル
+    /// - 録画中: 操作ウィンドウ・録画停止のパネル・デスクトップの字幕・全画面出力の画面の手書き (線は全画面出力の映像に入っているので二重にしない)
+    /// - 画面を背景にしている間: その画面の上にある、操作ウィンドウ・ワイプ・全画面出力・キーボード・指し棒・録画停止のパネル・字幕
     ///   (合わせ鏡にならないように。手書きとホワイトボードは外さず、背景に映す)
     /// この指定はすべての取り込みに効くので、背景の画面と同じ画面を録画するときは、ワイプなどが録画にも映らない。
     /// ほかのアプリの画面共有からも消えるので、必要な間だけ付ける
@@ -333,10 +334,12 @@ public sealed partial class OverlayController : IDisposable
         var want = new Dictionary<IntPtr, bool>();
         void Mark(IntPtr h, bool exclude) { if (h != IntPtr.Zero) want[h] = (want.TryGetValue(h, out var e) && e) || exclude; }
 
-        foreach (var h in new[] { main, panel, model.Outputs.WipeHwnd, model.Outputs.FullHwnd, keyboardWindow.Hwnd, pointerWindow.Hwnd })
+        var subtitle = model.Subtitles?.WindowHwnd ?? IntPtr.Zero;
+        foreach (var h in new[] { main, panel, subtitle, model.Outputs.WipeHwnd, model.Outputs.FullHwnd, keyboardWindow.Hwnd, pointerWindow.Hwnd })
             Mark(h, bg != null && IsOn(h, bg));
         Mark(main, recording);
         Mark(panel, recording);
+        Mark(subtitle, recording);   // デスクトップの字幕は録画に映さない (字幕は .srt と字幕トラックで残す)
         foreach (var w in annotations.Windows)
             Mark(w.Hwnd, recording && full != null && w.Display.Name == full.Name);
 

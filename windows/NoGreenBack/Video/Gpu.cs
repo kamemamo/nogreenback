@@ -229,6 +229,17 @@ public sealed class Gpu : IDisposable
         Context.OMSetRenderTargets((ID3D11RenderTargetView)null!);
     }
 
+    /// 画像 (プリマルチプライドα) を target の上に重ねる
+    public void DrawImages(ID3D11RenderTargetView target, int targetW, int targetH, IReadOnlyList<(GpuImage Image, Vector4 Rect)> images)
+    {
+        Context.OMSetRenderTargets(target);
+        Context.RSSetViewport(new Viewport(0, 0, targetW, targetH));
+        Context.OMSetBlendState(blendOver);
+        foreach (var (image, rect) in images) Draw(psImage, image.Srv, new ShaderParams { Rect = rect });
+        Context.OMSetBlendState(null);
+        Context.OMSetRenderTargets((ID3D11RenderTargetView)null!);
+    }
+
     /// target 全体を透明にして、人物を personRect に描く
     public void DrawPerson(ID3D11RenderTargetView target, int targetW, int targetH, Vector4 personRect, bool mirror, bool showPerson, float gain)
     {

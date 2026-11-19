@@ -73,6 +73,7 @@ public partial class App : Application
         if (Model == null) { base.OnExit(e); return; }   // 二重に起動して、すぐ終えたとき
         // 画面を覆う透明なウィンドウ・録画の後片付けは、作ったらここで行う (SPEC.md 2 章)
         Model.Recording.Dispose();   // 録画中なら、ファイルを閉じてから終える
+        Model.Subtitles.Dispose();
         Model.Overlays.Dispose();
         Model.Outputs.Dispose();
         Model.Video.Dispose();

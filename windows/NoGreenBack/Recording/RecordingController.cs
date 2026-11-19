@@ -142,11 +142,15 @@ public sealed partial class RecordingController : Observable, IDisposable
         ClosePanel();
         string? saved = null;
         bool noFrames = false, noAudio = false;
+        var subtitles = model.Subtitles;
+        string trackLanguage = subtitles.TrackLanguage;
         try
         {
             (saved, noFrames, noAudio) = await Task.Run(() =>
             {
                 rec.Stop();
+                // 録画中に確定した字幕の文 (録画の最初のコマを 0 とした秒)
+                var cues = rec.FrameCount > 0 ? CuesOnUiThread(subtitles, rec.StartTicks) : [];
                 if (rec.FrameCount == 0)
                 {
                     TryDelete(rec.TempPath);
@@ -157,6 +161,7 @@ public sealed partial class RecordingController : Observable, IDisposable
                 {
                     ScreenRecorder.Remux(rec.TempPath, finalPath);
                     TryDelete(rec.TempPath);
+                    WriteSubtitles(finalPath, cues, trackLanguage);
                     return (finalPath, false, silent);
                 }
                 catch (Exception e)
@@ -200,6 +205,23 @@ public sealed partial class RecordingController : Observable, IDisposable
                 MessageBox.Show(Loc.L("マイクの音が届いていなかったため、録画には音が入っていません。\n「マイク」の選択と、右のメーターが動くかを確かめてください。"), "NoGreenBack", MessageBoxButton.OK, MessageBoxImage.Information);
             try { Process.Start("explorer.exe", $"/select,\"{saved}\""); } catch { }
         }
+    }
+
+    /// 字幕の文を UI のスレッドで受け取る
+    static List<Speech.SubtitleCue> CuesOnUiThread(Speech.SubtitleController subtitles, long startTicks) =>
+        Application.Current.Dispatcher.Invoke(() => subtitles.RecordedCues(startTicks));
+
+    /// 録画と同じ名前の .srt と、MP4 の中の字幕トラックを作る (SPEC.md 10 章「録画したときの字幕」)
+    static void WriteSubtitles(string mp4, List<Speech.SubtitleCue> cues, string language)
+    {
+        if (cues.Count == 0) return;
+        try
+        {
+            File.WriteAllText(Path.ChangeExtension(mp4, ".srt"), Speech.SubtitleText.Srt(cues), new System.Text.UTF8Encoding(false));
+            Speech.Mp4SubtitleTrack.Append(mp4, cues, language);
+            Log.Write($"録画: 字幕 {cues.Count} 文を .srt と字幕トラックに書きました");
+        }
+        catch (Exception e) { Log.Write($"録画の字幕を書けません: {e.Message}"); }
     }
 
     void UpdateElapsed()

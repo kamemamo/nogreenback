@@ -44,6 +44,9 @@ public sealed class ScreenRecorder : IDisposable
 
     TimeSpan? firstFrameTime;
     long startTicks;        // 最初のコマが届いた時刻 (Stopwatch。音の時刻の基準)
+
+    /// 最初のコマが届いた時刻 (Stopwatch。録画の 0 秒。字幕の時刻の基準)
+    public long StartTicks => startTicks;
     long lastVideoTime = long.MinValue;
     long nextKeyFrame;
     long audioNext = long.MinValue;

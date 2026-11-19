@@ -52,8 +52,8 @@
                               ToolTip="{l:L '切り抜いた人物を、テレビのワイプのようにデスクトップの隅に小さく重ねて出します (クリックは後ろのアプリに届きます)。人物をどこにも出したくないときは「人物」をオフにします'}"/>
                 <ToggleButton Style="{StaticResource PillToggle}" Content="{l:L 字幕}" IsChecked="{Binding State.SubtitlesOn}" Margin="0,0,2,0" x:Name="SubtitleButton"
                               ToolTip="{l:L '話した言葉を文字にして、映像の下に出します。認識はこの PC の中で行います。%@S', Shortcut=True}"/>
-                <Button Style="{StaticResource PillButton}" Padding="0" Width="26"
-                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Content="&#xE82D;" IsEnabled="False"
+                <Button Style="{StaticResource PillButton}" Padding="0" Width="26" x:Name="TermsButton" Click="TermsButton_Click"
+                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Content="&#xE82D;"
                         ToolTip="{l:L 字幕の言語と置き換え (よく間違える言葉の直し方) を設定します}"/>
 
                 <Rectangle Width="1" Height="18" Fill="#CFCFD4" Margin="6,0,12,0"/>
@@ -137,6 +137,19 @@
                         </Style>
                     </Border.Style>
                     <TextBlock Text="{Binding Video.Message}" TextWrapping="Wrap"/>
+                </Border>
+                <!-- 字幕のお知らせ (モデルのダウンロード中など) -->
+                <Border DockPanel.Dock="Top" Background="#FFF4D6" Padding="10,6">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Subtitles.Message}" Value="">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <TextBlock Text="{Binding Subtitles.Message}" TextWrapping="Wrap"/>
                 </Border>
                 <v:D3DHost x:Name="PreviewHost"/>
             </DockPanel>

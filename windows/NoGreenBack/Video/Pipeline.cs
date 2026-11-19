@@ -8,15 +8,17 @@ using System.Windows.Threading;
 
 namespace NoGreenBack.Video;
 
-/// 合成に重ねる画像の種類 (この順で重ねる)
-public enum LayerKind { Keyboard, Annotation, Pointer }
+/// 合成に重ねる画像の種類 (この順で重ねる)。SpoutSubtitle だけは合成には重ねず、
+/// 背景がないときに Spout へ送る元の大きさの人物 (カメラの大きさ) に重ねる
+public enum LayerKind { Keyboard, Annotation, Pointer, Subtitle, SpoutSubtitle }
 
 /// 合成に重ねる画像 (BGRA、プリマルチプライドα)。キャンバスの (X, Y) に置く。
 /// CanvasWidth × CanvasHeight のキャンバスに合わせて作ったもので、キャンバスの大きさが違えば重ねない
 public sealed record LayerImage(byte[] Pixels, int Width, int Height, int X, int Y, int CanvasWidth, int CanvasHeight);
 
-/// 合成したキャンバスの大きさと、人物を置いた枠 (キャンバスの画素)
-public sealed record CanvasInfo(int Width, int Height, double PersonX, double PersonY, double PersonWidth, double PersonHeight);
+/// 合成したキャンバスの大きさと、人物を置いた枠 (キャンバスの画素)、カメラの大きさ
+public sealed record CanvasInfo(int Width, int Height, double PersonX, double PersonY, double PersonWidth, double PersonHeight,
+    int CameraWidth, int CameraHeight);
 
 public sealed class Pipeline : Observable, IDisposable
 {
@@ -41,10 +43,11 @@ public sealed class Pipeline : Observable, IDisposable
 
     // 重ねる画像とホワイトボード (UI のスレッドで入れ、合成のときに GPU に上げる。layerGate で守る)
     readonly object layerGate = new();
-    readonly LayerImage?[] pendingLayers = new LayerImage?[3];
-    readonly bool[] layerDirty = new bool[3];
-    readonly LayerImage?[] currentLayers = new LayerImage?[3];
-    readonly GpuImage[] layerImages = [new(), new(), new()];
+    const int LayerCount = 5;
+    readonly LayerImage?[] pendingLayers = new LayerImage?[LayerCount];
+    readonly bool[] layerDirty = new bool[LayerCount];
+    readonly LayerImage?[] currentLayers = new LayerImage?[LayerCount];
+    readonly GpuImage[] layerImages = Enumerable.Range(0, LayerCount).Select(_ => new GpuImage()).ToArray();
     float boardOpacity;
     CanvasInfo? canvasInfo;
     readonly Dispatcher uiDispatcher = Dispatcher.CurrentDispatcher;
@@ -196,7 +199,7 @@ public sealed class Pipeline : Observable, IDisposable
         bool right = s.OverlayCorner is 0 or 2, bottom = s.OverlayCorner is 0 or 1;
         var personRect = new Vector4(right ? canvasW - pw : 0, bottom ? canvasH - ph : 0, pw, ph);
 
-        var info = new CanvasInfo(canvasW, canvasH, personRect.X, personRect.Y, personRect.Z, personRect.W);
+        var info = new CanvasInfo(canvasW, canvasH, personRect.X, personRect.Y, personRect.Z, personRect.W, cameraW, cameraH);
         if (info != canvasInfo)
         {
             Volatile.Write(ref canvasInfo, info);
@@ -204,10 +207,11 @@ public sealed class Pipeline : Observable, IDisposable
         }
 
         // 重ねる画像: 新しく入ったものを GPU に上げ、このキャンバスの大きさに合うものだけを重ねる
-        var layers = new List<(GpuImage, Vector4)>(3);
+        var layers = new List<(GpuImage, Vector4)>(LayerCount);
+        (GpuImage, Vector4)? spoutSubtitle = null;
         lock (layerGate)
         {
-            for (int k = 0; k < 3; k++)
+            for (int k = 0; k < LayerCount; k++)
             {
                 if (layerDirty[k])
                 {
@@ -215,7 +219,12 @@ public sealed class Pipeline : Observable, IDisposable
                     currentLayers[k] = pendingLayers[k];
                     if (pendingLayers[k] is { } img) layerImages[k].Update(gpu, img.Pixels, img.Width, img.Height);
                 }
-                if (currentLayers[k] is { } cur && cur.CanvasWidth == canvasW && cur.CanvasHeight == canvasH)
+                if (k == (int)LayerKind.SpoutSubtitle)
+                {
+                    spoutSubtitle = currentLayers[k] is { } sc && sc.CanvasWidth == cameraW && sc.CanvasHeight == cameraH
+                        ? (layerImages[k], new Vector4(sc.X, sc.Y, sc.Width, sc.Height)) : null;
+                }
+                else if (currentLayers[k] is { } cur && cur.CanvasWidth == canvasW && cur.CanvasHeight == canvasH)
                     layers.Add((layerImages[k], new Vector4(cur.X, cur.Y, cur.Width, cur.Height)));
             }
         }
@@ -236,6 +245,7 @@ public sealed class Pipeline : Observable, IDisposable
                 {
                     spoutPerson.Ensure(gpu, cameraW, cameraH);
                     gpu.DrawPerson(spoutPerson.Rtv!, cameraW, cameraH, new Vector4(0, 0, cameraW, cameraH), s.Mirror, s.PersonOn && hasCamera, gain);
+                    if (spoutSubtitle is { } sub) gpu.DrawImages(spoutPerson.Rtv!, cameraW, cameraH, [sub]);   // 字幕だけは下の中央に入れる
                     spout.Send(spoutPerson.Srv!, cameraW, cameraH, s.FlipVertical, s.StraightAlpha);
                 }
             }

@@ -28,3 +28,11 @@
 "＋キー" = " + key";
 "ほかのアプリが同じ組み合わせを使っていて効かないときに替えます。Stream Deck などに設定した組み合わせも替えてください" = "Change this when another app uses the same combination. Update the combination set in Stream Deck and similar tools too";
 "ショートカットの一覧 (Ctrl+/) の「組み合わせ」で、ほかの組み合わせに替えられます。" = "You can switch to another combination with \"Modifiers\" in the shortcut list (Ctrl+/).";
+"字幕の認識に使うモデル「%@」(約 %d MB) を Hugging Face からダウンロードします。認識はこの PC の中だけで行い、音声はネットに送りません。" = "Subtitles need the speech model %@ (about %d MB), which will be downloaded from Hugging Face. Recognition runs only on this PC, and your voice is never sent over the internet.";
+"字幕のモデルをダウンロードしています… %d%%" = "Downloading the subtitle model… %d%%";
+"字幕のモデルをダウンロードできません: %@" = "Can't download the subtitle model: %@";
+"字幕のモデルを読み込んでいます…" = "Loading the subtitle model…";
+"字幕の認識が止まりました: %@" = "Subtitle recognition stopped: %@";
+"AI で聞き間違いを直す" = "Fix mishearings with AI";
+"AI での直しは、Windows 版にはまだ入っていません" = "AI fixes aren't available in the Windows version yet";
+"よく間違える言葉を「間違い → 正しい」と 1 行ずつ書くと、字幕と字幕ファイルで置き換えます (例: ジオメトリー濃度 → ジオメトリーノード、ブレンダー → Blender)。→ は -> や = でも書けます。書いた内容は自動で残ります。ほかの PC や別の話題用に、ファイルに保存・読み込みもできます" = "Write commonly misheard words one per line as “wrong → right” and they are replaced in subtitles and subtitle files (e.g. ジオメトリー濃度 → ジオメトリーノード, ブレンダー → Blender). You can also use -> or = instead of →. What you write is kept automatically. You can save it to a file or load one, for other PCs or other topics.";

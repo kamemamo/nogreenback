@@ -110,6 +110,15 @@ public static class KeyboardRenderer
     static T Frozen<T>(T f) where T : Freezable { f.Freeze(); return f; }
 
     /// 横幅およそ pixelWidth 画素のキーボードの画像 (Pbgra32)。小さすぎれば null
+    /// 横幅およそ pixelWidth 画素のキーボードの画像の大きさ (Render と同じ計算。字幕をキーボードの上に置くため)
+    public static Size? PixelSize(double pixelWidth)
+    {
+        const double pad = 0.2;
+        double unit = Math.Floor(pixelWidth / (Width + pad * 2));
+        if (unit < 4) return null;
+        return new Size(Math.Round((Width + pad * 2) * unit), Math.Round((Height + pad * 2) * unit));
+    }
+
     public static BitmapSource? Render(double pixelWidth, bool jis)
     {
         const double pad = 0.2;
