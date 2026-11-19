@@ -2,3 +2,7 @@ vendor/
 NoGreenBack.app/
 .DS_Store
 dist/
+windows/**/bin/
+windows/**/obj/
+windows/.vs/
+*.user

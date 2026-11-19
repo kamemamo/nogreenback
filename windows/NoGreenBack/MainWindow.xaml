@@ -1,0 +1,350 @@
+﻿<Window x:Class="NoGreenBack.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:l="clr-namespace:NoGreenBack"
+        xmlns:v="clr-namespace:NoGreenBack.Video"
+        Title="NoGreenBack"
+        Width="1240" Height="760" MinWidth="900" MinHeight="560"
+        WindowStartupLocation="CenterScreen"
+        Background="#F6F6F7"
+        UseLayoutRounding="True"
+        TextOptions.TextFormattingMode="Display">
+
+    <!-- 上から「上部のボタン」「区切り線」「プレビュー（左）＋サイドバー（右）」(SPEC.md 2 章) -->
+    <DockPanel>
+
+        <!-- ───── 上部のボタン ───── -->
+        <DockPanel DockPanel.Dock="Top" Margin="10,8" LastChildFill="True">
+
+            <!-- 右寄せのもの (録画・経過時間・フレームレート・?) -->
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                <ToggleButton x:Name="RecordButton" Style="{StaticResource RecordToggle}" MinWidth="110"
+                              IsChecked="{Binding State.Recording}" IsEnabled="False"
+                              ToolTip="{l:L 録画はまだ作っていません}">
+                    <TextBlock>
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Text" Value="{l:L ● 録画開始}"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding State.Recording}" Value="True">
+                                        <Setter Property="Text" Value="{l:L ■ 録画停止}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </ToggleButton>
+                <TextBlock Width="64" VerticalAlignment="Center" Text="{Binding State.ElapsedText}"/>
+                <TextBlock Width="64" VerticalAlignment="Center" TextAlignment="Right" Margin="0,0,8,0"
+                           Foreground="{StaticResource SubtleTextBrush}" Text="{Binding State.FpsText}"/>
+                <Button x:Name="HelpButton" Style="{StaticResource PillButton}" Padding="0" Width="26" Margin="0"
+                        Content="?" FontWeight="Bold" Click="HelpButton_Click"
+                        ToolTip="{l:L 'ショートカットと使い方 (Ctrl+/)'}"/>
+            </StackPanel>
+
+            <WrapPanel VerticalAlignment="Center">
+                <ToggleButton Style="{StaticResource PillToggle}" Content="{l:L 人物}" IsChecked="{Binding Settings.PersonOn}"
+                              ToolTip="{l:L '人物を出すかどうかの大もとのスイッチです。オフにすると、ワイプ・全画面・プレビュー・Spout のすべてから人物が消えて、背景だけになります。%@P', Shortcut=True}"
+                              x:Name="PersonButton"/>
+                <ToggleButton Style="{StaticResource PillToggle}" Content="{l:L 全画面}" IsChecked="{Binding State.FullScreen}" x:Name="FullScreenButton"
+                              ToolTip="{l:L '合成した映像を、選んだ画面いっぱいに表示します。Esc か %@F で閉じます', Shortcut=True}"/>
+                <ToggleButton Style="{StaticResource PillToggle}" Content="{l:L ワイプ}" IsChecked="{Binding Settings.OverlayOn}"
+                              ToolTip="{l:L '切り抜いた人物を、テレビのワイプのようにデスクトップの隅に小さく重ねて出します (クリックは後ろのアプリに届きます)。人物をどこにも出したくないときは「人物」をオフにします'}"/>
+                <ToggleButton Style="{StaticResource PillToggle}" Content="{l:L 字幕}" IsChecked="{Binding State.SubtitlesOn}" Margin="0,0,2,0" x:Name="SubtitleButton"
+                              ToolTip="{l:L '話した言葉を文字にして、映像の下に出します。認識はこの PC の中で行います。%@S', Shortcut=True}"/>
+                <Button Style="{StaticResource PillButton}" Padding="0" Width="26"
+                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Content="&#xE82D;" IsEnabled="False"
+                        ToolTip="{l:L 字幕の言語と置き換え (よく間違える言葉の直し方) を設定します}"/>
+
+                <Rectangle Width="1" Height="18" Fill="#CFCFD4" Margin="6,0,12,0"/>
+
+                <ToggleButton Style="{StaticResource PillToggle}" Content="{l:L 手書き}" IsChecked="{Binding Settings.AnnotationOn}"
+                              ToolTip="{l:L 選んだキーを押している間だけ、画面にペンで書けます。離すと後ろのアプリを操作できます}"/>
+                <ToggleButton Style="{StaticResource PillToggle}" Content="{l:L ペン固定}" IsChecked="{Binding State.PenLock}" x:Name="PenLockButton"
+                              ToolTip="{l:L 'キーを押さなくても描ける状態にします。オンの間は後ろのアプリをクリックできません。%@D', Shortcut=True}"/>
+                <ToggleButton Style="{StaticResource PillToggle}" Content="{l:L ホワイトボード}" IsChecked="{Binding State.WhiteboardOn}" x:Name="WhiteboardButton"
+                              ToolTip="{l:L '画面に半透明の白い板を敷いて、手書きの線を見やすくします。人物は板の手前に出ます。%@W', Shortcut=True}"/>
+                <Button Style="{StaticResource PillButton}" Content="{l:L 消去}" Click="ClearButton_Click" x:Name="ClearButton"
+                        ToolTip="{l:L '手書きを全部消します。%@C でも消せます', Shortcut=True}"/>
+                <ToggleButton Style="{StaticResource PillToggle}" Content="{l:L キーボード}" IsChecked="{Binding Settings.KeyboardOn}" x:Name="KeyboardButton"
+                              ToolTip="{l:L 'キーボード (JIS / US 配列・テンキー付き。Mac と Windows のキーの名前入り) の絵を出します。手書きで「このキー」と示すときに使います。%@B', Shortcut=True}"/>
+                <ToggleButton Style="{StaticResource PillToggle}" Content="{l:L 指し棒}" IsChecked="{Binding State.PointerOn}" x:Name="PointerButton"
+                              ToolTip="{l:L 'マウスの位置を指し棒の矢印で指します (オンの間はマウスカーソルを隠します)。%@L', Shortcut=True}"/>
+                <!-- ATEM の入力ボタンと「ミックス」は、ATEM が USB でつながっている間だけここに出す -->
+                <StackPanel x:Name="AtemButtons" Orientation="Horizontal" Visibility="Collapsed"/>
+            </WrapPanel>
+        </DockPanel>
+
+        <Rectangle DockPanel.Dock="Top" Height="1" Fill="#DCDCE0"/>
+
+        <!-- ───── プレビュー（左）＋サイドバー（右） ───── -->
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="1"/>
+                <ColumnDefinition Width="340"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- プレビュー: 映像の外の余白は黒。透明な部分だけ市松模様 (Direct3D 11 で描く。Video/Gpu.cs) -->
+            <DockPanel Grid.Column="0" Background="Black">
+                <!-- お知らせ (Direct3D の描画の上には WPF の文字を重ねられないので、上に帯で出す) -->
+                <Border DockPanel.Dock="Top" Background="#FFF4D6" Padding="10,6">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Video.Camera.Message}" Value="">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <TextBlock Text="{Binding Video.Camera.Message}" TextWrapping="Wrap"/>
+                </Border>
+                <v:D3DHost x:Name="PreviewHost"/>
+            </DockPanel>
+
+            <Rectangle Grid.Column="1" Fill="#DCDCE0"/>
+
+            <!-- サイドバー -->
+            <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel Margin="14,0,14,16">
+
+                    <!-- カメラ -->
+                    <TextBlock Style="{StaticResource SectionHeader}" Text="{l:L カメラ}"/>
+                    <DockPanel Style="{StaticResource Row}">
+                        <TextBlock Style="{StaticResource RowLabel}" Text="{l:L カメラ}"/>
+                        <ComboBox ItemsSource="{Binding Video.Camera.Cameras}" DisplayMemberPath="Name"
+                                  SelectedValuePath="Id" SelectedValue="{Binding Video.Camera.SelectedId}"/>
+                    </DockPanel>
+                    <DockPanel Style="{StaticResource Row}">
+                        <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 品質}"/>
+                        <ComboBox SelectedIndex="{Binding State.Quality}">
+                            <ComboBoxItem Content="{l:L 'Fast (低負荷)'}"/>
+                            <ComboBoxItem Content="Balanced"/>
+                            <ComboBoxItem Content="{l:L 'Accurate (高品質)'}"/>
+                        </ComboBox>
+                    </DockPanel>
+                    <DockPanel Style="{StaticResource Row}">
+                        <TextBlock Style="{StaticResource RowLabel}" Text="{l:L フレームレート}"/>
+                        <ComboBox SelectedIndex="{Binding Settings.FrameRateIndex}"
+                                  ToolTip="{l:L 照明の電源周波数に合わせると、フリッカー (明滅) が出にくくなります}">
+                            <ComboBoxItem Content="{l:L '30fps (60Hz・西日本)'}"/>
+                            <ComboBoxItem Content="{l:L '25fps (50Hz・東日本)'}"/>
+                            <ComboBoxItem Content="{l:L '20fps (50Hz・より安定)'}"/>
+                        </ComboBox>
+                    </DockPanel>
+                    <DockPanel Style="{StaticResource Row}" ToolTip="{l:L 照明のフリッカーによる画面全体の明滅をならします (横じまは消せません)}">
+                        <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 明るさ安定化}"/>
+                        <TextBlock DockPanel.Dock="Right" Style="{StaticResource SliderValue}" Text="{Binding State.BrightnessStabilization, StringFormat=F2}"/>
+                        <Slider Minimum="0" Maximum="1" Value="{Binding State.BrightnessStabilization}"/>
+                    </DockPanel>
+                    <WrapPanel Margin="0,4,0,0">
+                        <CheckBox Content="{l:L 左右反転}" IsChecked="{Binding Settings.Mirror}"/>
+                        <CheckBox Content="{l:L 上下反転}" IsChecked="{Binding Settings.FlipVertical}"/>
+                        <CheckBox Content="{l:L ストレートα}" IsChecked="{Binding Settings.StraightAlpha}"
+                                  ToolTip="{l:L 'オフ: プリマルチプライドα (既定) / オン: ストレートα。受信側で縁が黒くなる・白くなる場合に切り替え'}"/>
+                    </WrapPanel>
+
+                    <!-- 切り抜きの調整 (開け閉めできる。開け閉めは保存) -->
+                    <Expander IsExpanded="{Binding Settings.TuningOpen}" Margin="0,10,0,0">
+                        <Expander.Header>
+                            <TextBlock FontWeight="Bold" FontSize="13" Text="{l:L 切り抜きの調整}"/>
+                        </Expander.Header>
+                        <StackPanel Margin="0,4,0,0">
+                            <DockPanel Style="{StaticResource Row}" ToolTip="{l:L 上げるほど輪郭のちらつきが減ります。上げすぎると動いたときに残像が出ます}">
+                                <TextBlock Style="{StaticResource RowLabel}" Text="{l:L ちらつき抑制}"/>
+                                <TextBlock DockPanel.Dock="Right" Style="{StaticResource SliderValue}" Text="{Binding State.FlickerReduction, StringFormat=F2}"/>
+                                <Slider Minimum="0" Maximum="1" Value="{Binding State.FlickerReduction}"/>
+                            </DockPanel>
+                            <DockPanel Style="{StaticResource Row}" ToolTip="{l:L 上げるほど、手をかざしたときなどに体の一部が一瞬消える現象を抑えます。上げすぎると、移動した後に元の位置がうっすら残ります}">
+                                <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 消失の保持}"/>
+                                <TextBlock DockPanel.Dock="Right" Style="{StaticResource SliderValue}" Text="{Binding State.DropoutHold, StringFormat=F2}"/>
+                                <Slider Minimum="0" Maximum="1" Value="{Binding State.DropoutHold}"/>
+                            </DockPanel>
+                            <DockPanel Style="{StaticResource Row}" ToolTip="{l:L 上げるほど半透明の縁 (背景のにじみ) が減り、輪郭がくっきりします}">
+                                <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 境界の締まり}"/>
+                                <TextBlock DockPanel.Dock="Right" Style="{StaticResource SliderValue}" Text="{Binding State.EdgeTightness, StringFormat=F2}"/>
+                                <Slider Minimum="0" Maximum="1" Value="{Binding State.EdgeTightness}"/>
+                            </DockPanel>
+                            <DockPanel Style="{StaticResource Row}">
+                                <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 境界ぼかし}"/>
+                                <TextBlock DockPanel.Dock="Right" Style="{StaticResource SliderValue}" Text="{Binding State.EdgeBlur, StringFormat=F1}"/>
+                                <Slider Minimum="0" Maximum="6" Value="{Binding State.EdgeBlur}"/>
+                            </DockPanel>
+                        </StackPanel>
+                    </Expander>
+
+                    <!-- 人物の位置と大きさ -->
+                    <TextBlock Style="{StaticResource SectionHeader}" Text="{l:L 人物の位置と大きさ}"/>
+                    <DockPanel Style="{StaticResource Row}">
+                        <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 位置}"/>
+                        <ComboBox SelectedIndex="{Binding Settings.OverlayCorner}">
+                            <ComboBoxItem Content="{l:L 右下}"/>
+                            <ComboBoxItem Content="{l:L 左下}"/>
+                            <ComboBoxItem Content="{l:L 右上}"/>
+                            <ComboBoxItem Content="{l:L 左上}"/>
+                        </ComboBox>
+                    </DockPanel>
+                    <DockPanel Style="{StaticResource Row}" ToolTip="{l:L 画面の幅に対する大きさ}">
+                        <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 大きさ}"/>
+                        <TextBlock DockPanel.Dock="Right" Style="{StaticResource SliderValue}" Text="{Binding Settings.OverlayScale, StringFormat=P0}"/>
+                        <Slider Minimum="0.15" Maximum="0.8" Value="{Binding Settings.OverlayScale}"/>
+                    </DockPanel>
+                    <DockPanel Style="{StaticResource Row}">
+                        <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 表示する画面}"/>
+                        <ComboBox IsEnabled="False" ToolTip="{l:L まだ作っていません}"/>
+                    </DockPanel>
+
+                    <!-- 背景と全画面出力 -->
+                    <TextBlock Style="{StaticResource SectionHeader}" Text="{l:L 背景と全画面出力}"/>
+                    <DockPanel Style="{StaticResource Row}">
+                        <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 背景映像}"/>
+                        <ComboBox IsEnabled="False" ToolTip="{l:L まだ作っていません}"/>
+                    </DockPanel>
+                    <DockPanel Style="{StaticResource Row}">
+                        <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 出す画面}"/>
+                        <ComboBox IsEnabled="False" ToolTip="{l:L まだ作っていません}"/>
+                    </DockPanel>
+                    <DockPanel Style="{StaticResource Row}">
+                        <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 映像の比率}"/>
+                        <ComboBox SelectedIndex="{Binding Settings.AspectIndex}"
+                                  ToolTip="{l:L 背景と人物を合成した映像の横縦比。「出す画面に合わせる」なら、プロジェクターや外部モニターに全画面で出したときに上下や左右が黒くなりません}">
+                            <ComboBoxItem Content="{l:L 出す画面に合わせる}"/>
+                            <ComboBoxItem Content="{l:L カメラと同じ}"/>
+                        </ComboBox>
+                    </DockPanel>
+
+                    <!-- 手書き -->
+                    <TextBlock Style="{StaticResource SectionHeader}" Text="{l:L 手書き}"/>
+                    <DockPanel Style="{StaticResource Row}">
+                        <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 描くキー}"/>
+                        <ComboBox SelectedIndex="{Binding Settings.DrawKey}">
+                            <ComboBoxItem Content="Ctrl"/>
+                            <ComboBoxItem Content="Alt"/>
+                            <ComboBoxItem Content="Ctrl+Alt"/>
+                        </ComboBox>
+                    </DockPanel>
+                    <DockPanel Style="{StaticResource Row}">
+                        <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 色}"/>
+                        <ComboBox DockPanel.Dock="Right" Width="110" Margin="6,0,0,0" SelectedIndex="{Binding Settings.PenFade}">
+                            <ComboBoxItem Content="{l:L 消さない}"/>
+                            <ComboBoxItem Content="{l:L 3秒で消す}"/>
+                            <ComboBoxItem Content="{l:L 10秒で消す}"/>
+                        </ComboBox>
+                        <ComboBox SelectedIndex="{Binding Settings.PenColor}">
+                            <ComboBoxItem Content="{l:L 赤}"/>
+                            <ComboBoxItem Content="{l:L 黄}"/>
+                            <ComboBoxItem Content="{l:L 青}"/>
+                            <ComboBoxItem Content="{l:L 緑}"/>
+                            <ComboBoxItem Content="{l:L 白}"/>
+                            <ComboBoxItem Content="{l:L 黒}"/>
+                        </ComboBox>
+                    </DockPanel>
+                    <DockPanel Style="{StaticResource Row}">
+                        <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 太さ}"/>
+                        <TextBlock DockPanel.Dock="Right" Style="{StaticResource SliderValue}" Text="{Binding Settings.PenWidth, StringFormat=F0}"/>
+                        <Slider Minimum="2" Maximum="20" Value="{Binding Settings.PenWidth}"/>
+                    </DockPanel>
+                    <DockPanel Style="{StaticResource Row}" ToolTip="{l:L ホワイトボードの白さ。濃くするほど後ろの画面が見えにくくなります}">
+                        <TextBlock Style="{StaticResource RowLabel}" Text="{l:L ボードの濃さ}"/>
+                        <TextBlock DockPanel.Dock="Right" Style="{StaticResource SliderValue}" Text="{Binding Settings.BoardOpacity, StringFormat=P0}"/>
+                        <Slider Minimum="0.3" Maximum="0.95" Value="{Binding Settings.BoardOpacity}"/>
+                    </DockPanel>
+
+                    <!-- キーボード -->
+                    <TextBlock Style="{StaticResource SectionHeader}" Text="{l:L キーボード}"/>
+                    <DockPanel Style="{StaticResource Row}">
+                        <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 配列}"/>
+                        <ComboBox SelectedIndex="{Binding Settings.KeyboardLayoutIndex}">
+                            <ComboBoxItem Content="JIS"/>
+                            <ComboBoxItem Content="US"/>
+                        </ComboBox>
+                    </DockPanel>
+                    <DockPanel Style="{StaticResource Row}">
+                        <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 位置}"/>
+                        <ComboBox SelectedIndex="{Binding Settings.KeyboardPlace}">
+                            <ComboBoxItem Content="{l:L 人物の反対側}"/>
+                            <ComboBoxItem Content="{l:L 下の中央}"/>
+                            <ComboBoxItem Content="{l:L 左下}"/>
+                            <ComboBoxItem Content="{l:L 右下}"/>
+                            <ComboBoxItem Content="{l:L 上の中央}"/>
+                        </ComboBox>
+                    </DockPanel>
+                    <DockPanel Style="{StaticResource Row}">
+                        <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 大きさ}"/>
+                        <TextBlock DockPanel.Dock="Right" Style="{StaticResource SliderValue}" Text="{Binding Settings.KeyboardSize, StringFormat=P0}"/>
+                        <Slider Minimum="0.35" Maximum="0.95" Value="{Binding Settings.KeyboardSize}"/>
+                    </DockPanel>
+
+                    <!-- 録画 -->
+                    <TextBlock Style="{StaticResource SectionHeader}" Text="{l:L 録画}"/>
+                    <DockPanel Style="{StaticResource Row}">
+                        <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 録画する画面}"/>
+                        <ComboBox IsEnabled="False" ToolTip="{l:L まだ作っていません}"/>
+                    </DockPanel>
+                    <DockPanel Style="{StaticResource Row}">
+                        <TextBlock Style="{StaticResource RowLabel}" Text="{l:L マイク}"/>
+                        <ComboBox IsEnabled="False" ToolTip="{l:L まだ作っていません}"/>
+                    </DockPanel>
+                    <DockPanel Style="{StaticResource Row}">
+                        <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 映像}"/>
+                        <ComboBox DockPanel.Dock="Right" Width="110" Margin="6,0,0,0"
+                                  ItemsSource="{x:Static l:Choices.RecAudioKbps}" SelectedItem="{Binding Settings.RecAudioKbps}"
+                                  ItemStringFormat="{}{0} kbps" ToolTip="{l:L 音声 (AAC・48kHz・モノラル) のビットレート}"/>
+                        <ComboBox ItemsSource="{x:Static l:Choices.RecMbps}" SelectedItem="{Binding Settings.RecMbps}"
+                                  ItemStringFormat="{}{0} Mbps" ToolTip="{l:L 映像の平均ビットレート。上げるほど文字や動きがきれいになり、ファイルが大きくなります}"/>
+                    </DockPanel>
+                    <DockPanel Style="{StaticResource Row}">
+                        <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 長辺}"/>
+                        <ComboBox DockPanel.Dock="Right" Width="110" Margin="6,0,0,0"
+                                  ItemsSource="{x:Static l:Choices.RecFPS}" SelectedItem="{Binding Settings.RecFPS}"
+                                  ItemStringFormat="{}{0} fps" ToolTip="{l:L 最大フレームレート (画面が動かない間はコマ数が減ります)}"/>
+                        <ComboBox x:Name="LongSideCombo" ToolTip="{l:L 録画の長辺のピクセル数 (画面のほうが小さいときは画面のまま)。1920 で 1080p 相当}"/>
+                    </DockPanel>
+                    <DockPanel Style="{StaticResource Row}">
+                        <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 形式}"/>
+                        <ComboBox SelectedIndex="{Binding Settings.RecFormatIndex}"
+                                  ToolTip="{l:L 同じ Mbps なら HEVC のほうが高画質 (ファイルの大きさは Mbps で決まります)。古い PC や一部の編集ソフトでは開けないことがあります}">
+                            <ComboBoxItem Content="H.264"/>
+                            <ComboBoxItem Content="HEVC (H.265)"/>
+                        </ComboBox>
+                    </DockPanel>
+                    <TextBlock Margin="104,4,0,0" Foreground="{StaticResource SubtleTextBrush}" Text="{Binding Settings.GigabytesPerHourText}"/>
+
+                    <!-- 外部の音声 -->
+                    <TextBlock Style="{StaticResource SectionHeader}" Text="{l:L 外部の音声}"/>
+                    <DockPanel Style="{StaticResource Row}">
+                        <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 入力}"/>
+                        <ComboBox IsEnabled="False" ToolTip="{l:L まだ作っていません}"/>
+                    </DockPanel>
+                    <DockPanel Style="{StaticResource Row}">
+                        <TextBlock Style="{StaticResource RowLabel}" Text="{l:L スピーカー}"/>
+                        <ComboBox IsEnabled="False" ToolTip="{l:L まだ作っていません}"/>
+                    </DockPanel>
+                    <DockPanel Style="{StaticResource Row}" ToolTip="{l:L 外部の音の音量。スピーカーに出す音と、録画に入る音の両方が変わります}">
+                        <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 音量}"/>
+                        <TextBlock DockPanel.Dock="Right" Style="{StaticResource SliderValue}" Text="{Binding Settings.ExternalVolume, StringFormat=P0}"/>
+                        <Slider Minimum="0" Maximum="1" Value="{Binding Settings.ExternalVolume}"/>
+                    </DockPanel>
+                    <DockPanel Style="{StaticResource Row}">
+                        <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 声で下げる}"/>
+                        <ComboBox SelectedIndex="{Binding Settings.ExternalDuckIndex}"
+                                  ToolTip="{l:L マイクで話している間、録画に入る外部の音を自動で下げます (スピーカーに出す音は下げません)}">
+                            <ComboBoxItem Content="{l:L 下げない}"/>
+                            <ComboBoxItem Content="{l:L '少し (-6dB)'}"/>
+                            <ComboBoxItem Content="{l:L '半分くらい (-12dB)'}"/>
+                            <ComboBoxItem Content="{l:L '大きく (-20dB)'}"/>
+                        </ComboBox>
+                    </DockPanel>
+
+                    <!-- ATEM スイッチャー (USB で ATEM がつながっている間だけ出す) -->
+                    <StackPanel x:Name="AtemSection" Visibility="Collapsed">
+                        <TextBlock Style="{StaticResource SectionHeader}" Text="{l:L ATEM スイッチャー}"/>
+                        <TextBlock x:Name="AtemStatus" TextWrapping="Wrap"/>
+                    </StackPanel>
+
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+    </DockPanel>
+</Window>

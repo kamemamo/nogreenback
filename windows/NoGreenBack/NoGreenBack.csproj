@@ -1,0 +1,31 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!-- Windows.Graphics.Capture などの WinRT の API を使うため、Windows SDK 付きの TFM にする。動かすのは Windows 11 から -->
+    <TargetFramework>net10.0-windows10.0.22621.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.22000.0</SupportedOSPlatformVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>NoGreenBack</RootNamespace>
+    <AssemblyName>NoGreenBack</AssemblyName>
+    <Product>NoGreenBack</Product>
+    <Version>0.1.0</Version>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Win32 の API を LibraryImport で呼ぶため -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 英語の訳は Mac 版と同じファイルを直接使う。Windows だけの文は Resources/en.strings に足す -->
+    <EmbeddedResource Include="..\..\Resources\en.lproj\Localizable.strings" LogicalName="Shared.en.strings" />
+    <EmbeddedResource Include="Resources\en.strings" LogicalName="Windows.en.strings" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Vortice.D3DCompiler" Version="3.8.3" />
+    <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
+  </ItemGroup>
+
+</Project>

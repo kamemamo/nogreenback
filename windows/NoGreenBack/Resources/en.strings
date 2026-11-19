@@ -1,0 +1,12 @@
+/* NoGreenBack Windows 版だけの英語の訳 (キーは日本語の文)。
+   Mac 版と共有の訳は Resources/en.lproj/Localizable.strings にあり、同じキーがあればこちらが優先される。
+   Mac にしかない言葉 (Syphon、Mac、⌘ など) を言い換えた文をここに書く。 */
+
+"人物を出すかどうかの大もとのスイッチです。オフにすると、ワイプ・全画面・プレビュー・Spout のすべてから人物が消えて、背景だけになります。%@P" = "The master switch for the person. When off, the person disappears from PiP, full screen, preview and Spout, leaving only the background. %@P";
+"話した言葉を文字にして、映像の下に出します。認識はこの PC の中で行います。%@S" = "Turns your speech into text shown at the bottom of the video. Recognition runs on this PC. %@S";
+"同じ Mbps なら HEVC のほうが高画質 (ファイルの大きさは Mbps で決まります)。古い PC や一部の編集ソフトでは開けないことがあります" = "At the same Mbps HEVC looks better (file size depends on Mbps). Some older PCs and editing apps can't open it";
+"ショートカットと使い方 (Ctrl+/)" = "Shortcuts and how to use (Ctrl+/)";
+"まだ作っていません" = "Not implemented yet";
+"録画はまだ作っていません" = "Recording isn't implemented yet";
+"カメラへのアクセスが許可されていません。\n設定 > プライバシーとセキュリティ > カメラ で、「デスクトップ アプリがカメラにアクセスできるようにする」をオンにしてください。" = "Camera access isn't allowed.\nIn Settings > Privacy & security > Camera, turn on \"Let desktop apps access your camera\".";
+"エラーが起きたため終了します: %@" = "NoGreenBack quit because of an error: %@";
