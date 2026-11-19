@@ -1,3 +1,6 @@
 <Solution>
+  <Folder Name="/Tools/">
+    <Project Path="Tools/SegBench/SegBench.csproj" />
+  </Folder>
   <Project Path="NoGreenBack/NoGreenBack.csproj" />
 </Solution>

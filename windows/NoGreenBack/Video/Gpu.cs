@@ -18,7 +18,7 @@ namespace NoGreenBack.Video;
 struct ShaderParams
 {
     public Vector4 Rect;    // 合成: 人物を置く四角 / 表示: 映像を置く四角 (どちらも左上原点の画素)
-    public Vector4 P0;      // 合成: z 左右反転, w 人物を出す / 表示: x 市松模様のます目の大きさ, y 市松模様を敷く
+    public Vector4 P0;      // 合成: x 明るさの倍率, y マスクがある, z 左右反転, w 人物を出す / 表示: x 市松模様のます目の大きさ, y 市松模様を敷く
     public Vector4 P1;
 }
 
@@ -26,11 +26,13 @@ public sealed class Gpu : IDisposable
 {
     // シェーダー。D3DCompiler には ASCII だけを渡す (日本語のコメントを入れると、文字数とバイト数がずれて末尾が切れる)
     // VS: 画面全体を覆う三角形 1 つ
-    // PSComposite: 透明の上に人物を置く (出力はプリマルチプライドα)。人物マスクができるまでは不透明
+    // PSComposite: カメラの映像をマスクで切り抜き、明るさの倍率を掛けて、透明の上に置く (出力はプリマルチプライドα)。
+    //             マスクは線形補間でカメラの大きさに広げる。マスクがまだないときは人物を出さない
     // PSPresent: 縦横比を保って置き、透明な部分だけ市松模様 (明るい灰 0.8 と暗い灰 0.55)、外は黒
     const string Shaders = """
         cbuffer Params : register(b0) { float4 rect; float4 p0; float4 p1; };
         Texture2D tex : register(t0);
+        Texture2D maskTex : register(t1);
         SamplerState smp : register(s0);
 
         struct VO { float4 pos : SV_Position; };
@@ -46,11 +48,11 @@ public sealed class Gpu : IDisposable
         float4 PSComposite(VO i) : SV_Target
         {
             float2 q = (i.pos.xy - rect.xy) / rect.zw;
-            if (p0.w < 0.5 || any(q < 0) || any(q > 1)) return 0;
+            if (p0.w < 0.5 || p0.y < 0.5 || any(q < 0) || any(q > 1)) return 0;
             if (p0.z > 0.5) q.x = 1 - q.x;
-            float4 c = tex.Sample(smp, q);
-            c.a = 1;
-            return float4(c.rgb * c.a, c.a);
+            float3 rgb = saturate(tex.Sample(smp, q).rgb * p0.x);
+            float a = maskTex.Sample(smp, q).r;
+            return float4(rgb * a, a);
         }
 
         float4 PSPresent(VO i) : SV_Target
@@ -76,6 +78,11 @@ public sealed class Gpu : IDisposable
     ID3D11Texture2D? cameraTex;
     ID3D11ShaderResourceView? cameraSrv;
     int cameraW, cameraH;
+
+    ID3D11Texture2D? maskTex;
+    ID3D11ShaderResourceView? maskSrv;
+    int maskW, maskH;
+    bool hasMask;
 
     ID3D11Texture2D? canvasTex;
     ID3D11RenderTargetView? canvasRtv;
@@ -119,17 +126,43 @@ public sealed class Gpu : IDisposable
             Context.UpdateSubresource(cameraTex, 0, null, (IntPtr)p, (uint)(width * 4), 0);
     }
 
-    /// 人物をキャンバスの personRect (x, y, 幅, 高さ) に置く。カメラのコマがまだないか showPerson が false なら、人物なし (透明)
-    public void Compose(int canvasW, int canvasH, Vector4 personRect, bool mirror, bool showPerson)
+    /// 人物マスク (8 bit、width×height) をテクスチャに上げる
+    public unsafe void UploadMask(byte[] mask, int width, int height)
+    {
+        if (maskTex == null || maskW != width || maskH != height)
+        {
+            maskSrv?.Dispose(); maskTex?.Dispose();
+            maskTex = Device.CreateTexture2D(new Texture2DDescription
+            {
+                Width = (uint)width, Height = (uint)height, MipLevels = 1, ArraySize = 1,
+                Format = Format.R8_UNorm, SampleDescription = new SampleDescription(1, 0),
+                Usage = ResourceUsage.Default, BindFlags = BindFlags.ShaderResource,
+            });
+            maskSrv = Device.CreateShaderResourceView(maskTex);
+            maskW = width; maskH = height;
+        }
+        fixed (byte* p = mask)
+            Context.UpdateSubresource(maskTex, 0, null, (IntPtr)p, (uint)width, 0);
+        hasMask = true;
+    }
+
+    /// マスクを捨てる (モデルを読み込み直している間は人物を出さない)
+    public void ClearMask() => hasMask = false;
+
+    /// 人物をキャンバスの personRect (x, y, 幅, 高さ) に置く。
+    /// カメラのコマかマスクがまだないか、showPerson が false なら、人物なし (透明)
+    public void Compose(int canvasW, int canvasH, Vector4 personRect, bool mirror, bool showPerson, float gain)
     {
         EnsureCanvas(canvasW, canvasH);
         Context.OMSetRenderTargets(canvasRtv!);
         Context.RSSetViewport(new Viewport(0, 0, canvasW, canvasH));
+        Context.PSSetShaderResource(1, hasMask ? maskSrv! : null!);
         Draw(psComposite, cameraSrv, new ShaderParams
         {
             Rect = personRect,
-            P0 = new Vector4(0, 0, mirror ? 1 : 0, showPerson && cameraSrv != null ? 1 : 0),
+            P0 = new Vector4(gain, hasMask ? 1 : 0, mirror ? 1 : 0, showPerson && cameraSrv != null ? 1 : 0),
         });
+        Context.PSSetShaderResource(1, null!);
         Context.OMSetRenderTargets((ID3D11RenderTargetView)null!);
     }
 
@@ -181,6 +214,7 @@ public sealed class Gpu : IDisposable
     {
         CanvasSrv?.Dispose(); canvasRtv?.Dispose(); canvasTex?.Dispose();
         cameraSrv?.Dispose(); cameraTex?.Dispose();
+        maskSrv?.Dispose(); maskTex?.Dispose();
         paramsBuffer.Dispose(); sampler.Dispose();
         psPresent.Dispose(); psComposite.Dispose(); vs.Dispose();
         Context.Dispose(); Device.Dispose();

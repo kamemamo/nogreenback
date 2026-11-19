@@ -6,3 +6,5 @@ windows/**/bin/
 windows/**/obj/
 windows/.vs/
 *.user
+windows/models/*.onnx
+windows/models/*.part

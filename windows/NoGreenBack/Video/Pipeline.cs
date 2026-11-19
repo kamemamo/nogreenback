@@ -8,7 +8,7 @@ using System.Windows.Threading;
 
 namespace NoGreenBack.Video;
 
-public sealed class Pipeline : IDisposable
+public sealed class Pipeline : Observable, IDisposable
 {
     readonly object gate = new();
     readonly AppModel model;
@@ -25,7 +25,18 @@ public sealed class Pipeline : IDisposable
     int composedCount;
     long lastFpsTicks = Environment.TickCount64;
 
+    // 人物の切り抜き
+    readonly string? modelsDir = ModelSpec.FindModelsDir();
+    readonly BrightnessStabilizer brightness = new();
+    readonly MaskProcessor maskProcessor = new();
+    Segmenter? segmenter;
+    int modelVersion;
+    float gain = 1;
+
     public CameraCapture Camera { get; }
+
+    /// 操作ウィンドウに出すお知らせ (切り抜きのモデルがないとき。空なら出さない)
+    public string Message { get; }
 
     public Pipeline(AppModel model)
     {
@@ -46,6 +57,13 @@ public sealed class Pipeline : IDisposable
             model.State.FpsText = $"{fps:F1} fps";
         }, Dispatcher.CurrentDispatcher);
         fpsTimer.Start();
+
+        Message = modelsDir == null ? Loc.L("切り抜きのモデルが見つかりません (windows\\models\\download.ps1 を実行してください)") : "";
+        model.State.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(AppState.Quality)) ReloadModel();
+        };
+        ReloadModel();
     }
 
     void OnCameraFrame(byte[] pixels, int width, int height)
@@ -53,10 +71,55 @@ public sealed class Pipeline : IDisposable
         lock (gate)
         {
             if (disposed) return;
+            var st = model.State;
+
+            // 1. 明るさ安定化
+            gain = brightness.Gain(pixels, width, height, st.BrightnessStabilization);
+
+            // 2〜6. 人物マスクと後処理 (「人物」がオフの間は動かさない)
+            if (segmenter != null && model.Settings.PersonOn)
+            {
+                try
+                {
+                    var mask = segmenter.Run(pixels, width, height, gain);
+                    var bytes = maskProcessor.Process(mask, segmenter.Spec.Width, segmenter.Spec.Height, st);
+                    gpu.UploadMask(bytes, segmenter.Spec.Width, segmenter.Spec.Height);
+                }
+                catch (Exception e)
+                {
+                    Log.Write($"切り抜きに失敗しました ({segmenter.Spec.Name}): {e.Message}");
+                    gpu.ClearMask();
+                }
+            }
+
             gpu.UploadCamera(pixels, width, height);
             cameraW = width; cameraH = height;
             ComposeAndPresent();
         }
+    }
+
+    /// 品質に合わせて、モデルを読み込み直す (読み込みは裏で行い、終わったら差し替える)
+    void ReloadModel()
+    {
+        int quality = model.State.Quality;
+        int version = Interlocked.Increment(ref modelVersion);
+
+        if (modelsDir == null) return;   // 上部に「モデルが見つかりません」と出る
+        Task.Run(() =>
+        {
+            Segmenter? loaded = null;
+            try { loaded = Segmenter.Load(quality, modelsDir); }
+            catch (Exception e) { Log.Write($"切り抜きのモデルを読み込めません: {e.Message}"); }
+            lock (gate)
+            {
+                if (disposed || version != modelVersion) { loaded?.Dispose(); return; }
+                segmenter?.Dispose();
+                segmenter = loaded;
+                maskProcessor.Reset();   // 品質を変えたらマスクの履歴を捨てる
+                gpu.ClearMask();
+            }
+            if (loaded != null) Log.Write($"切り抜き: {loaded.Spec.Name} ({loaded.Provider})");
+        });
     }
 
     void OnIdleTick()
@@ -78,7 +141,7 @@ public sealed class Pipeline : IDisposable
         var personRect = new Vector4(right ? canvasW - pw : 0, bottom ? canvasH - ph : 0, pw, ph);
 
         bool hasCamera = Camera.MillisecondsSinceLastFrame < 500;
-        gpu.Compose(canvasW, canvasH, personRect, s.Mirror, s.PersonOn && hasCamera);
+        gpu.Compose(canvasW, canvasH, personRect, s.Mirror, s.PersonOn && hasCamera, gain);
         Interlocked.Increment(ref composedCount);
 
         if (preview != null && previewVisible) preview.Present(checkerboard: true);
@@ -111,6 +174,8 @@ public sealed class Pipeline : IDisposable
         lock (gate)
         {
             disposed = true;
+            segmenter?.Dispose();
+            segmenter = null;
             preview?.Dispose();
             preview = null;
             gpu.Dispose();

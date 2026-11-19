@@ -530,8 +530,9 @@ Mac では `UserDefaults`（キーは下の表の名前）に保存していま�
    - 映像（プレビュー・全画面出力・Spout）は WPF に描かせず、Direct3D 11 で描く（C# からは Vortice.Windows などを使う）。
    - Spout と ATEM の SDK は C++ なので、小さな C++ の DLL を挟む（Mac 版の `Sources/ATEMSDK` と同じ考え方）。
 2. **人物の切り抜き: ONNX Runtime ＋ DirectML（GPU がなければ CPU）**
-   - 品質の 3 段階: Fast は MediaPipe Selfie Segmentation（landscape）、Balanced と Accurate は MODNet か PP-HumanSeg v2 を解像度を変えて使う。GPU がない PC では Fast に固定する。
-   - 最初に 2〜3 個のモデルを試作して、縁の質と速さを比べて決める。モデルは差し替えられる作りにする。
+   - 品質の 3 段階: Fast は MediaPipe Selfie Segmentation（landscape、入力 256x144）、Balanced は MODNet（入力 512x288）、Accurate は MODNet（入力 672x384）。GPU（DirectML）が使えない PC では、どの品質でも Fast を CPU で動かす。
+   - 試作で MediaPipe・PP-HumanSeg・MODNet（3 つの大きさ）を比べて決めた（2026-11-19）。縁の質はどれも使える出来だった。速さは、GPU ならどれも 1 コマ 20 ms 以内で 30 fps に収まり、CPU で 30 fps に間に合うのは MediaPipe と PP-HumanSeg だけだった。PP-HumanSeg は正方形の入力（192x192）で横長の映像に合わず、MediaPipe より CPU で遅いので使わない。測った数字は `windows/README.md` にある。
+   - モデルは同梱せず、`windows/models/download.ps1` で版を固定して取ってくる（どちらも Apache-2.0）。モデルは差し替えられる作りにする。
    - Robust Video Matting は GPL-3.0 なので同梱しない。Windows ML への移行（Windows 11 24H2 以降が要る）は後で考える。
    - 3 章のマスクの後処理（ちらつき抑制など）はモデルによらず同じものを使う。
 3. **字幕の認識: 端末の中だけで行う（Whisper。whisper.cpp を Whisper.net から使う）**
@@ -555,7 +556,7 @@ Mac では `UserDefaults`（キーは下の表の名前）に保存していま�
 ### あわせて決めておくこと
 
 - 対応する Windows は **Windows 11** のみとする（録画から自分のウィンドウを外す指定や、画面の取り込みの枠を消す指定がそろうため）。
-- GPU がない PC でどこまで動けばよいか（人物の切り抜きは Fast、字幕は小さいモデル、など）は、試作で速さを測ってから決める。
+- GPU がない PC では、人物の切り抜きは Fast（MediaPipe を CPU で、1 コマ約 3 ms）にする。字幕のモデルの大きさは、字幕を作るときに速さを測ってから決める。
 
 ---
 

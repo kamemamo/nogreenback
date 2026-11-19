@@ -36,7 +36,11 @@ public sealed class CameraCapture : Observable, IDisposable
         set
         {
             // 一覧から消えたときに選択が空になっても、開いているカメラはそのまま (戻ってきたら開き直す)
-            if (value != null && Set(ref selectedId, value)) _ = OpenAsync(value);
+            if (value != null && Set(ref selectedId, value))
+            {
+                Log.Write($"カメラを選びました: {Cameras.FirstOrDefault(c => c.Id == value)?.Name}");
+                _ = OpenAsync(value);
+            }
         }
     }
 
@@ -85,20 +89,32 @@ public sealed class CameraCapture : Observable, IDisposable
     {
         if (!info.IsEnabled || Cameras.Any(c => c.Id == info.Id)) return;
         Cameras.Add(new CameraInfo(info.Id, info.Name));
+        if (enumerated) Log.Write($"カメラがつながりました: {info.Name}");
         if (info.Id == openId && selectedId != info.Id)
         {
             // 抜いていたカメラが戻ってきた (開き直しは見張りが行う)
             selectedId = info.Id;
             Raise(nameof(SelectedId));
         }
-        else if (enumerated && openId == null) SelectedId = info.Id;   // カメラがない状態でつながれたら、自動で開く
+        else if (enumerated && !Cameras.Any(c => c.Id == selectedId)
+                 && openLock.CurrentCount == 1 && MillisecondsSinceLastFrame > 3000)
+        {
+            // 選んでいるカメラがない (最初からない・抜かれて映像が止まっている) ときにつながれたら、自動で開く。
+            // 開いている最中や映像が届いている間は、ほかのカメラの知らせが届いても乗り換えない
+            // (仮想カメラが実物のカメラを使い始めると、機器が一度消えて出直すことがある)
+            SelectedId = info.Id;
+        }
         if (Message == Loc.L("カメラが見つかりません。カメラをつなぐと、自動で映ります。")) Message = "";
     }
 
     void OnRemoved(string id)
     {
         var cam = Cameras.FirstOrDefault(c => c.Id == id);
-        if (cam != null) Cameras.Remove(cam);
+        if (cam != null)
+        {
+            Cameras.Remove(cam);
+            Log.Write($"カメラが外れました: {cam.Name}");
+        }
         if (Cameras.Count == 0) Message = Loc.L("カメラが見つかりません。カメラをつなぐと、自動で映ります。");
     }
 

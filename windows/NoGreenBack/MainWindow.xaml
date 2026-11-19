@@ -100,6 +100,18 @@
                     </Border.Style>
                     <TextBlock Text="{Binding Video.Camera.Message}" TextWrapping="Wrap"/>
                 </Border>
+                <Border DockPanel.Dock="Top" Background="#FFF4D6" Padding="10,6">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Video.Message}" Value="">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <TextBlock Text="{Binding Video.Message}" TextWrapping="Wrap"/>
+                </Border>
                 <v:D3DHost x:Name="PreviewHost"/>
             </DockPanel>
 
