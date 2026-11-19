@@ -7,19 +7,18 @@
 // - 出していた画面が外れたら閉じる (残った画面に出し直すと、操作ウィンドウのある画面まで覆うため)。「出す画面」を変えたら作り直す
 //
 // ワイプ
-// - 枠なし・背景透明・クリックは後ろへ通す・アクティブにならない・最前面のウィンドウ。1 秒ごとに最前面を取り直す
+// - 枠なし・背景透明・クリックは後ろへ通す・アクティブにならない・最前面のウィンドウ
+//   (1 秒ごとに最前面を取り直すのは、ほかの重ねるウィンドウとの順番と合わせて Overlays.OverlayController が行う)
 // - 大きさは 幅 = 画面の幅 × 大きさ、高さ = 幅 × 9 / 16。選んだ隅にぴったり付ける
 // - 出す条件: ワイプ オン かつ 人物 オン かつ 全画面出力が同じ画面を覆っていない
 
 using System.ComponentModel;
-using System.Windows.Threading;
 
 namespace NoGreenBack.Video;
 
 public sealed class OutputWindows : IDisposable
 {
     readonly AppModel model;
-    readonly DispatcherTimer topmostTimer;
 
     SurfaceWindow? full;
     DisplayInfo? fullDisplay;
@@ -27,15 +26,20 @@ public sealed class OutputWindows : IDisposable
     (int X, int Y, int W, int H) overlayRect;
     bool disposed;
 
+    /// 全画面出力を出している画面 (出していなければ null)
+    public DisplayInfo? FullDisplay => fullDisplay;
+    public IntPtr FullHwnd => full?.Hwnd ?? IntPtr.Zero;
+    public IntPtr WipeHwnd => overlay?.Hwnd ?? IntPtr.Zero;
+
+    /// 全画面出力やワイプを開け閉めした・動かした
+    public event Action? Changed;
+
     public OutputWindows(AppModel model)
     {
         this.model = model;
         model.State.PropertyChanged += OnChanged;
         model.Settings.PropertyChanged += OnChanged;
         model.Displays.Changed += OnDisplaysChanged;
-
-        topmostTimer = new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background, (_, _) => overlay?.BringToTop(), Dispatcher.CurrentDispatcher);
-        topmostTimer.Start();
         Update();
     }
 
@@ -64,6 +68,7 @@ public sealed class OutputWindows : IDisposable
         if (disposed) return;
         UpdateFull();
         UpdateOverlay();
+        Changed?.Invoke();
     }
 
     void UpdateFull()
@@ -138,7 +143,6 @@ public sealed class OutputWindows : IDisposable
     public void Dispose()
     {
         disposed = true;
-        topmostTimer.Stop();
         CloseOverlay();
         CloseFull();
     }

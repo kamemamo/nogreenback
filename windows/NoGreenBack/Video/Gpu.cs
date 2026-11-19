@@ -30,6 +30,8 @@ public sealed class Gpu : IDisposable
     // PSComposite: カメラの映像をマスクで切り抜き、明るさの倍率を掛けて、透明の上に置く (出力はプリマルチプライドα)。
     //             マスクは線形補間でカメラの大きさに広げる。マスクがまだないときは人物を出さない
     // PSPresent: 縦横比を保って置き、透明な部分だけ市松模様 (明るい灰 0.8 と暗い灰 0.55)、外は黒
+    // PSFill: p1 の色で塗る (ホワイトボードの板。プリマルチプライドα)
+    // PSImage: 画像 (プリマルチプライドα) を rect に置く。外は何もしない
     const string Shaders = """
         cbuffer Params : register(b0) { float4 rect; float4 p0; float4 p1; };
         Texture2D tex : register(t0);
@@ -56,6 +58,18 @@ public sealed class Gpu : IDisposable
             return float4(rgb * a, a);
         }
 
+        float4 PSFill(VO i) : SV_Target
+        {
+            return p1;
+        }
+
+        float4 PSImage(VO i) : SV_Target
+        {
+            float2 q = (i.pos.xy - rect.xy) / rect.zw;
+            if (any(q < 0) || any(q > 1)) return 0;
+            return tex.Sample(smp, q);
+        }
+
         float4 PSPresent(VO i) : SV_Target
         {
             float2 q = (i.pos.xy - rect.xy) / rect.zw;
@@ -72,8 +86,9 @@ public sealed class Gpu : IDisposable
     public ID3D11DeviceContext Context { get; }
 
     readonly ID3D11VertexShader vs;
-    readonly ID3D11PixelShader psComposite, psPresent;
+    readonly ID3D11PixelShader psComposite, psPresent, psFill, psImage;
     readonly ID3D11SamplerState sampler;
+    readonly ID3D11BlendState blendOver;   // プリマルチプライドαで上に重ねる
     readonly ID3D11Buffer paramsBuffer;
 
     ID3D11Texture2D? cameraTex;
@@ -101,7 +116,18 @@ public sealed class Gpu : IDisposable
         vs = Device.CreateVertexShader(Compile("VS", "vs_5_0"));
         psComposite = Device.CreatePixelShader(Compile("PSComposite", "ps_5_0"));
         psPresent = Device.CreatePixelShader(Compile("PSPresent", "ps_5_0"));
+        psFill = Device.CreatePixelShader(Compile("PSFill", "ps_5_0"));
+        psImage = Device.CreatePixelShader(Compile("PSImage", "ps_5_0"));
         sampler = Device.CreateSamplerState(SamplerDescription.LinearClamp);
+        var blend = new BlendDescription();
+        blend.RenderTarget[0] = new RenderTargetBlendDescription
+        {
+            BlendEnable = true,
+            SourceBlend = Blend.One, DestinationBlend = Blend.InverseSourceAlpha, BlendOperation = BlendOperation.Add,
+            SourceBlendAlpha = Blend.One, DestinationBlendAlpha = Blend.InverseSourceAlpha, BlendOperationAlpha = BlendOperation.Add,
+            RenderTargetWriteMask = ColorWriteEnable.All,
+        };
+        blendOver = Device.CreateBlendState(blend);
         paramsBuffer = Device.CreateBuffer(new BufferDescription((uint)Marshal.SizeOf<ShaderParams>(), BindFlags.ConstantBuffer));
     }
 
@@ -150,12 +176,28 @@ public sealed class Gpu : IDisposable
     /// マスクを捨てる (モデルを読み込み直している間は人物を出さない)
     public void ClearMask() => hasMask = false;
 
-    /// 人物をキャンバスの personRect (x, y, 幅, 高さ) に置く。
-    /// カメラのコマかマスクがまだないか、showPerson が false なら、人物なし (透明)
-    public void Compose(int canvasW, int canvasH, Vector4 personRect, bool mirror, bool showPerson, float gain)
+    /// キャンバスを合成する (奥から: 透明 → ホワイトボードの板 → 人物 → 重ねる画像 (キーボード・手書きの線・指し棒) の順)。
+    /// 人物は personRect (x, y, 幅, 高さ) に置く。カメラのコマかマスクがまだないか、showPerson が false なら人物なし。
+    /// board は板の濃さ (0 なら出さない)
+    public void Compose(int canvasW, int canvasH, Vector4 personRect, bool mirror, bool showPerson, float gain,
+        float board, IReadOnlyList<(GpuImage Image, Vector4 Rect)> layers)
     {
         EnsureCanvas(canvasW, canvasH);
-        DrawPerson(canvasRtv!, canvasW, canvasH, personRect, mirror, showPerson, gain);
+        Context.ClearRenderTargetView(canvasRtv!, new Color4(0, 0, 0, 0));
+        Context.OMSetRenderTargets(canvasRtv!);
+        Context.RSSetViewport(new Viewport(0, 0, canvasW, canvasH));
+        Context.OMSetBlendState(blendOver);
+        if (board > 0) Draw(psFill, null, new ShaderParams { P1 = new Vector4(board, board, board, board) });
+        Context.PSSetShaderResource(1, hasMask ? maskSrv! : null!);
+        Draw(psComposite, cameraSrv, new ShaderParams
+        {
+            Rect = personRect,
+            P0 = new Vector4(gain, hasMask ? 1 : 0, mirror ? 1 : 0, showPerson && cameraSrv != null ? 1 : 0),
+        });
+        Context.PSSetShaderResource(1, null!);
+        foreach (var (image, rect) in layers) Draw(psImage, image.Srv, new ShaderParams { Rect = rect });
+        Context.OMSetBlendState(null);
+        Context.OMSetRenderTargets((ID3D11RenderTargetView)null!);
     }
 
     /// target 全体を透明にして、人物を personRect に描く
@@ -222,9 +264,42 @@ public sealed class Gpu : IDisposable
         CanvasSrv?.Dispose(); canvasRtv?.Dispose(); canvasTex?.Dispose();
         cameraSrv?.Dispose(); cameraTex?.Dispose();
         maskSrv?.Dispose(); maskTex?.Dispose();
-        paramsBuffer.Dispose(); sampler.Dispose();
-        psPresent.Dispose(); psComposite.Dispose(); vs.Dispose();
+        paramsBuffer.Dispose(); sampler.Dispose(); blendOver.Dispose();
+        psImage.Dispose(); psFill.Dispose(); psPresent.Dispose(); psComposite.Dispose(); vs.Dispose();
         Context.Dispose(); Device.Dispose();
+    }
+}
+
+/// 合成に重ねる画像 (BGRA、プリマルチプライドα) のテクスチャ
+public sealed class GpuImage : IDisposable
+{
+    ID3D11Texture2D? texture;
+    public ID3D11ShaderResourceView? Srv { get; private set; }
+    public int Width { get; private set; }
+    public int Height { get; private set; }
+
+    public unsafe void Update(Gpu gpu, byte[] pixels, int width, int height)
+    {
+        if (texture == null || Width != width || Height != height)
+        {
+            Srv?.Dispose(); texture?.Dispose();
+            texture = gpu.Device.CreateTexture2D(new Texture2DDescription
+            {
+                Width = (uint)width, Height = (uint)height, MipLevels = 1, ArraySize = 1,
+                Format = Format.B8G8R8A8_UNorm, SampleDescription = new SampleDescription(1, 0),
+                Usage = ResourceUsage.Default, BindFlags = BindFlags.ShaderResource,
+            });
+            Srv = gpu.Device.CreateShaderResourceView(texture);
+            Width = width; Height = height;
+        }
+        fixed (byte* p = pixels)
+            gpu.Context.UpdateSubresource(texture, 0, null, (IntPtr)p, (uint)(width * 4), 0);
+    }
+
+    public void Dispose()
+    {
+        Srv?.Dispose(); texture?.Dispose();
+        Srv = null; texture = null;
     }
 }
 

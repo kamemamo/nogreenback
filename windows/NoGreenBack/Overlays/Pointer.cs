@@ -1,0 +1,139 @@
+// 指し棒 (SPEC.md 8 章「指し棒」。Mac 版の Sources/Pointer.swift と同じ形)
+// マウスカーソルの位置を矢印で指す、長さの決まった棒。画面に重ねるウィンドウと、合成した映像の両方で同じ絵を描く。
+// 座標は左上原点 (y は下向き)。
+
+using System.Runtime.InteropServices;
+using System.Windows;
+using System.Windows.Media;
+using System.Windows.Media.Effects;
+using System.Windows.Media.Imaging;
+
+namespace NoGreenBack.Overlays;
+
+public static class PointerRenderer
+{
+    /// 棒の長さ (画面の高さに対する割合)
+    const double LengthRatio = 0.45;
+
+    /// 棒の傾き (度。縦から、正なら根元が右)。棒はいつも矢印の右下に出して、左上を指す形にする。
+    /// 左の方を指すほど少し寝かせる。画面の端で棒がはみ出すときは、収まる向きに回す
+    public static double Angle(Point tip, Rect area)
+    {
+        double f = Math.Clamp((tip.X - area.Left) / Math.Max(area.Width, 1), 0, 1);
+        double preferred = 40 - 15 * f;   // 左端で 40 度、右端で 25 度
+        var inner = area;
+        inner.Inflate(-area.Height * 0.01, -area.Height * 0.01);
+        // まず根元を同じ側に保ったまま、近い向きから探す。それで収まらないときだけ、反対側も使う
+        double side = preferred >= 0 ? 1 : -1;
+        foreach (bool sameSideOnly in new[] { true, false })
+            for (int step = 0; step <= 90; step++)
+                foreach (int sign in step == 0 ? new[] { 1 } : new[] { 1, -1 })
+                {
+                    double deg = preferred + sign * step * 2;
+                    if (sameSideOnly && (deg * side < 0 || Math.Abs(deg) > 120)) continue;
+                    if (inner.Contains(Base(tip, deg, area))) return deg;
+                }
+        return preferred;
+    }
+
+    /// 傾き angle (度) のときの棒の根元 (手で持つ端)
+    public static Point Base(Point tip, double angle, Rect area)
+    {
+        double length = area.Height * LengthRatio, r = angle * Math.PI / 180;
+        return new Point(tip.X + Math.Sin(r) * length, tip.Y + Math.Cos(r) * length);
+    }
+
+    static readonly Brush StickBrush = Frozen(new SolidColorBrush(Color.FromRgb(128, 84, 51)));
+    static readonly Brush HeadBrush = Frozen(new SolidColorBrush(Color.FromRgb(230, 38, 31)));
+    static T Frozen<T>(T f) where T : Freezable { f.Freeze(); return f; }
+
+    /// 棒を描く (同じ太さの棒と、先の赤い矢印だけのシンプルな形)。size は画面 (映像) の高さ
+    public static void Draw(DrawingContext dc, Point start, Point tip, double size)
+    {
+        double dx = tip.X - start.X, dy = tip.Y - start.Y, length = Math.Sqrt(dx * dx + dy * dy);
+        if (length <= 1) return;
+        double ux = dx / length, uy = dy / length, nx = -uy, ny = ux;
+        // 先は矢印 (先端がちょうどマウスの位置)。棒は矢印の付け根まで
+        double headLength = size * 0.042, headHalf = size * 0.017;
+        var hb = new Point(tip.X - ux * headLength, tip.Y - uy * headLength);
+        var pen = new Pen(StickBrush, size * 0.01) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+        dc.DrawLine(pen, start, new Point(hb.X + ux * headLength * 0.2, hb.Y + uy * headLength * 0.2));
+        var head = new StreamGeometry();
+        using (var g = head.Open())
+        {
+            g.BeginFigure(tip, true, true);
+            g.PolyLineTo([new Point(hb.X + nx * headHalf, hb.Y + ny * headHalf), new Point(hb.X - nx * headHalf, hb.Y - ny * headHalf)], true, true);
+        }
+        dc.DrawGeometry(HeadBrush, null, head);
+    }
+
+    /// 棒のまわり (影の分の余白つき) だけの画像。area は画面 (映像) の範囲で、画像はその中に収める。
+    /// 返す rect は area の座標
+    public static BitmapSource? Render(Point start, Point tip, Rect area, out Int32Rect rect)
+    {
+        double size = area.Height, pad = size * 0.03;
+        var r = new Rect(Math.Min(start.X, tip.X) - pad, Math.Min(start.Y, tip.Y) - pad,
+                         Math.Abs(tip.X - start.X) + pad * 2, Math.Abs(tip.Y - start.Y) + pad * 2);
+        r.Intersect(area);
+        rect = new Int32Rect((int)Math.Floor(r.X), (int)Math.Floor(r.Y), (int)Math.Ceiling(r.Width), (int)Math.Ceiling(r.Height));
+        if (r.IsEmpty || rect.Width < 1 || rect.Height < 1) return null;
+
+        var visual = new DrawingVisual
+        {
+            // 軽い影 (明るい画面でも暗い画面でも見えるように)
+            Effect = new DropShadowEffect { ShadowDepth = 0, BlurRadius = Math.Max(1, size * 0.01), Color = Colors.Black, Opacity = 0.45 },
+        };
+        using (var dc = visual.RenderOpen())
+        {
+            dc.PushTransform(new TranslateTransform(-rect.X, -rect.Y));
+            Draw(dc, start, tip, size);
+            dc.Pop();
+        }
+        var bmp = new RenderTargetBitmap(rect.Width, rect.Height, 96, 96, PixelFormats.Pbgra32);
+        bmp.Render(visual);
+        bmp.Freeze();
+        return bmp;
+    }
+}
+
+/// 指し棒を出している間、マウスカーソルを隠す (矢印の先がカーソルの代わり)。
+/// ほかのアプリが前面でも隠れるよう、システムのカーソルを一時的に透明なものに差し替え、戻すときは設定から読み直す。
+/// 落ちたときにも戻るよう、App の終了・クラッシュの処理からも Show を呼ぶ
+public static partial class CursorHider
+{
+    static bool hidden;
+
+    // 差し替えるカーソル (矢印・I ビーム・待ち・十字・上矢印・大きさ変更 4 種・移動・禁止・手・バックグラウンド作業中・ヘルプ)
+    static readonly uint[] Ids = [32512, 32513, 32514, 32515, 32516, 32642, 32643, 32644, 32645, 32646, 32648, 32649, 32650, 32651];
+
+    public static void Hide()
+    {
+        if (hidden) return;
+        hidden = true;
+        var and = Enumerable.Repeat((byte)0xFF, 32 * 32 / 8).ToArray();   // AND が 1・XOR が 0 で、画面がそのまま見える (透明)
+        var xor = new byte[32 * 32 / 8];
+        foreach (var id in Ids)
+        {
+            var c = CreateCursor(IntPtr.Zero, 0, 0, 32, 32, and, xor);
+            if (c != IntPtr.Zero) SetSystemCursor(c, id);   // c はシステムのものになる (自分で消さない)
+        }
+    }
+
+    public static void Show()
+    {
+        if (!hidden) return;
+        hidden = false;
+        SystemParametersInfoW(0x57 /* SPI_SETCURSORS */, 0, IntPtr.Zero, 0);
+    }
+
+    [LibraryImport("user32.dll")]
+    private static partial IntPtr CreateCursor(IntPtr instance, int hotX, int hotY, int width, int height, byte[] andPlane, byte[] xorPlane);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SetSystemCursor(IntPtr cursor, uint id);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SystemParametersInfoW(uint action, uint param, IntPtr pvParam, uint winIni);
+}

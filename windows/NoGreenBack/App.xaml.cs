@@ -21,6 +21,9 @@ public partial class App : Application
             if (args.ExceptionObject is Exception ex) ReportCrash(ex);
         };
 
+        // どんな終わり方でも、指し棒で隠したカーソルを戻す
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => Overlays.CursorHider.Show();
+
         Model = new AppModel(Settings.Load());
         MainWindow = new MainWindow(Model);
         MainWindow.Show();
@@ -29,6 +32,7 @@ public partial class App : Application
     /// 思わぬエラーで止まるときは、%LOCALAPPDATA%\NoGreenBack\crash.log に書いて知らせる
     static void ReportCrash(Exception ex)
     {
+        Overlays.CursorHider.Show();   // 指し棒で隠したカーソルを戻す
         var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NoGreenBack", "crash.log");
         try
         {
@@ -43,6 +47,7 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         // 画面を覆う透明なウィンドウ・録画の後片付けは、作ったらここで行う (SPEC.md 2 章)
+        Model.Overlays.Dispose();
         Model.Outputs.Dispose();
         Model.Video.Dispose();
         Model.Displays.Dispose();

@@ -8,6 +8,16 @@ using System.Windows.Threading;
 
 namespace NoGreenBack.Video;
 
+/// 合成に重ねる画像の種類 (この順で重ねる)
+public enum LayerKind { Keyboard, Annotation, Pointer }
+
+/// 合成に重ねる画像 (BGRA、プリマルチプライドα)。キャンバスの (X, Y) に置く。
+/// CanvasWidth × CanvasHeight のキャンバスに合わせて作ったもので、キャンバスの大きさが違えば重ねない
+public sealed record LayerImage(byte[] Pixels, int Width, int Height, int X, int Y, int CanvasWidth, int CanvasHeight);
+
+/// 合成したキャンバスの大きさと、人物を置いた枠 (キャンバスの画素)
+public sealed record CanvasInfo(int Width, int Height, double PersonX, double PersonY, double PersonWidth, double PersonHeight);
+
 public sealed class Pipeline : Observable, IDisposable
 {
     readonly object gate = new();
@@ -26,6 +36,31 @@ public sealed class Pipeline : Observable, IDisposable
     int cameraW = 1920, cameraH = 1080;
     // 出す画面の横縦比 (UI のスレッドで書き、合成で読む。0 なら画面がない)
     double outputAspect;
+
+    // 重ねる画像とホワイトボード (UI のスレッドで入れ、合成のときに GPU に上げる。layerGate で守る)
+    readonly object layerGate = new();
+    readonly LayerImage?[] pendingLayers = new LayerImage?[3];
+    readonly bool[] layerDirty = new bool[3];
+    readonly LayerImage?[] currentLayers = new LayerImage?[3];
+    readonly GpuImage[] layerImages = [new(), new(), new()];
+    float boardOpacity;
+    CanvasInfo? canvasInfo;
+    readonly Dispatcher uiDispatcher = Dispatcher.CurrentDispatcher;
+
+    /// 合成したキャンバスの大きさや人物の枠が変わった (UI のスレッドで呼ばれる)
+    public event Action<CanvasInfo>? CanvasChanged;
+
+    /// いまのキャンバスの大きさと人物の枠 (まだ合成していなければ null)
+    public CanvasInfo? Canvas => Volatile.Read(ref canvasInfo);
+
+    /// 重ねる画像を入れる (null で消す)
+    public void SetLayer(LayerKind kind, LayerImage? image)
+    {
+        lock (layerGate) { pendingLayers[(int)kind] = image; layerDirty[(int)kind] = true; }
+    }
+
+    /// ホワイトボードの板の濃さ (0 なら出さない)
+    public float BoardOpacity { set => Volatile.Write(ref boardOpacity, value); }
     int composedCount;
     long lastFpsTicks = Environment.TickCount64;
 
@@ -152,8 +187,32 @@ public sealed class Pipeline : Observable, IDisposable
         bool right = s.OverlayCorner is 0 or 2, bottom = s.OverlayCorner is 0 or 1;
         var personRect = new Vector4(right ? canvasW - pw : 0, bottom ? canvasH - ph : 0, pw, ph);
 
+        var info = new CanvasInfo(canvasW, canvasH, personRect.X, personRect.Y, personRect.Z, personRect.W);
+        if (info != canvasInfo)
+        {
+            Volatile.Write(ref canvasInfo, info);
+            uiDispatcher.BeginInvoke(() => CanvasChanged?.Invoke(info));
+        }
+
+        // 重ねる画像: 新しく入ったものを GPU に上げ、このキャンバスの大きさに合うものだけを重ねる
+        var layers = new List<(GpuImage, Vector4)>(3);
+        lock (layerGate)
+        {
+            for (int k = 0; k < 3; k++)
+            {
+                if (layerDirty[k])
+                {
+                    layerDirty[k] = false;
+                    currentLayers[k] = pendingLayers[k];
+                    if (pendingLayers[k] is { } img) layerImages[k].Update(gpu, img.Pixels, img.Width, img.Height);
+                }
+                if (currentLayers[k] is { } cur && cur.CanvasWidth == canvasW && cur.CanvasHeight == canvasH)
+                    layers.Add((layerImages[k], new Vector4(cur.X, cur.Y, cur.Width, cur.Height)));
+            }
+        }
+
         bool hasCamera = Camera.MillisecondsSinceLastFrame < 500;
-        gpu.Compose(canvasW, canvasH, personRect, s.Mirror, s.PersonOn && hasCamera, gain);
+        gpu.Compose(canvasW, canvasH, personRect, s.Mirror, s.PersonOn && hasCamera, gain, Volatile.Read(ref boardOpacity), layers);
         Interlocked.Increment(ref composedCount);
 
         if (preview != null && previewVisible) preview.Present(checkerboard: true);
@@ -234,6 +293,7 @@ public sealed class Pipeline : Observable, IDisposable
             fullScreen = null;
             overlay?.Dispose();
             overlay = null;
+            foreach (var img in layerImages) img.Dispose();
             gpu.Dispose();
         }
     }
