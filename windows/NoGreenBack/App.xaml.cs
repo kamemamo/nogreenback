@@ -47,10 +47,12 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         // 画面を覆う透明なウィンドウ・録画の後片付けは、作ったらここで行う (SPEC.md 2 章)
+        Model.Recording.Dispose();   // 録画中なら、ファイルを閉じてから終える
         Model.Overlays.Dispose();
         Model.Outputs.Dispose();
         Model.Video.Dispose();
         Model.Displays.Dispose();
+        Model.Mic.Dispose();
         Model.Settings.Save();
         base.OnExit(e);
     }

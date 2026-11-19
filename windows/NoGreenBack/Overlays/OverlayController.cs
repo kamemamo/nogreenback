@@ -309,24 +309,49 @@ public sealed partial class OverlayController : IDisposable
         var order = new List<IntPtr> { boardWindow.Hwnd, model.Outputs.WipeHwnd, keyboardWindow.Hwnd, model.Outputs.FullHwnd };
         order.AddRange(annotations.Windows.Select(w => w.Hwnd));
         order.Add(pointerWindow.Hwnd);
+        order.Add(model.Recording?.PanelHwnd ?? IntPtr.Zero);   // 録画停止のパネルはいちばん手前
         OverlayWindow.Arrange(order);
-        ExcludeFromCapture();
+        UpdateCaptureExclusion();
     }
 
-    bool excluded;
+    readonly Dictionary<IntPtr, bool> excludedNow = [];
 
-    /// 画面を背景にしている間は、このアプリのウィンドウを画面の取り込みから外す (合わせ鏡にならないように)。
-    /// 手書きとホワイトボードのウィンドウは外さない (全画面出力に手書きが入るように)。
-    /// ほかのアプリの画面共有からも消えるので、画面を背景にしていない間は外さない
-    void ExcludeFromCapture()
+    /// 画面の取り込み (背景の画面・録画) から、このアプリのウィンドウを外す (SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE))。
+    /// - 録画中: 操作ウィンドウ・録画停止のパネル・全画面出力の画面の手書き (線は全画面出力の映像に入っているので二重にしない)
+    /// - 画面を背景にしている間: その画面の上にある、操作ウィンドウ・ワイプ・全画面出力・キーボード・指し棒・録画停止のパネル
+    ///   (合わせ鏡にならないように。手書きとホワイトボードは外さず、背景に映す)
+    /// この指定はすべての取り込みに効くので、背景の画面と同じ画面を録画するときは、ワイプなどが録画にも映らない。
+    /// ほかのアプリの画面共有からも消えるので、必要な間だけ付ける
+    public void UpdateCaptureExclusion()
     {
-        bool exclude = model.Video.Background.ScreenName != null;
-        if (!exclude && !excluded) return;
-        excluded = exclude;
         var main = Application.Current?.MainWindow is { } mw ? new System.Windows.Interop.WindowInteropHelper(mw).Handle : IntPtr.Zero;
-        foreach (var h in new[] { main, model.Outputs.WipeHwnd, model.Outputs.FullHwnd, keyboardWindow.Hwnd, pointerWindow.Hwnd })
-            if (h != IntPtr.Zero) SetWindowDisplayAffinity(h, exclude ? 0x11u /* WDA_EXCLUDEFROMCAPTURE */ : 0u);
+        var panel = model.Recording?.PanelHwnd ?? IntPtr.Zero;
+        bool recording = model.State.Recording;
+        var full = model.Outputs.FullDisplay;
+        var bg = model.Displays.Find(model.Video.Background.ScreenName);
+
+        var want = new Dictionary<IntPtr, bool>();
+        void Mark(IntPtr h, bool exclude) { if (h != IntPtr.Zero) want[h] = (want.TryGetValue(h, out var e) && e) || exclude; }
+
+        foreach (var h in new[] { main, panel, model.Outputs.WipeHwnd, model.Outputs.FullHwnd, keyboardWindow.Hwnd, pointerWindow.Hwnd })
+            Mark(h, bg != null && IsOn(h, bg));
+        Mark(main, recording);
+        Mark(panel, recording);
+        foreach (var w in annotations.Windows)
+            Mark(w.Hwnd, recording && full != null && w.Display.Name == full.Name);
+
+        foreach (var (h, exclude) in want)
+        {
+            if (excludedNow.TryGetValue(h, out var cur) && cur == exclude) continue;
+            if (!exclude && !excludedNow.ContainsKey(h)) continue;   // 一度も外していないものはそのまま
+            SetWindowDisplayAffinity(h, exclude ? 0x11u /* WDA_EXCLUDEFROMCAPTURE */ : 0u);
+            excludedNow[h] = exclude;
+        }
     }
+
+    /// ウィンドウがその画面に重なっているか
+    static bool IsOn(IntPtr h, DisplayInfo d) =>
+        GetWindowRect(h, out var r) && r.Left < d.Left + d.Width && r.Right > d.Left && r.Top < d.Top + d.Height && r.Bottom > d.Top;
 
     static byte[] Pixels(BitmapSource bmp)
     {
@@ -370,4 +395,11 @@ public sealed partial class OverlayController : IDisposable
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool SetWindowDisplayAffinity(IntPtr hwnd, uint affinity);
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct RECT { public int Left, Top, Right, Bottom; }
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetWindowRect(IntPtr hwnd, out RECT rect);
 }

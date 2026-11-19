@@ -19,6 +19,12 @@ public sealed class AppModel
     /// 手書き・ホワイトボード・キーボード・指し棒
     public Overlays.OverlayController Overlays { get; }
 
+    /// マイク (録画と、メーター)
+    public Audio.MicInput Mic { get; }
+
+    /// 画面録画
+    public Recording.RecordingController Recording { get; }
+
     public AppModel(Settings settings)
     {
         Settings = settings;
@@ -26,6 +32,8 @@ public sealed class AppModel
         Video = new Video.Pipeline(this);
         Outputs = new Video.OutputWindows(this);
         Overlays = new Overlays.OverlayController(this);
+        Mic = new Audio.MicInput(settings);
+        Recording = new Recording.RecordingController(this);
 
         // 画面の数が減ったら、ペン固定を外す (SPEC.md 5 章)
         Displays.Changed += fewer => { if (fewer) State.PenLock = false; };

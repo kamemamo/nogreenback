@@ -312,6 +312,7 @@ public sealed class Gpu : IDisposable
 public sealed class GpuTarget : IDisposable
 {
     ID3D11Texture2D? texture;
+    public ID3D11Texture2D? Texture => texture;
     public ID3D11RenderTargetView? Rtv { get; private set; }
     public ID3D11ShaderResourceView? Srv { get; private set; }
     public int Width { get; private set; }

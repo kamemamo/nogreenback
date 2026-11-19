@@ -19,8 +19,8 @@
             <!-- 右寄せのもの (録画・経過時間・フレームレート・?) -->
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
                 <ToggleButton x:Name="RecordButton" Style="{StaticResource RecordToggle}" MinWidth="110"
-                              IsChecked="{Binding State.Recording}" IsEnabled="False"
-                              ToolTip="{l:L 録画はまだ作っていません}">
+                              IsChecked="{Binding State.Recording, Mode=OneWay}" IsEnabled="{Binding Recording.CanToggle}"
+                              Click="RecordButton_Click" ToolTip="{l:L '「録画する画面」を録画して、ビデオ フォルダに保存します (このウィンドウは映りません)。%@R でも開始・停止できます', Shortcut=True}">
                     <TextBlock>
                         <TextBlock.Style>
                             <Style TargetType="TextBlock">
@@ -296,11 +296,14 @@
                     <TextBlock Style="{StaticResource SectionHeader}" Text="{l:L 録画}"/>
                     <DockPanel Style="{StaticResource Row}">
                         <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 録画する画面}"/>
-                        <ComboBox IsEnabled="False" ToolTip="{l:L まだ作っていません}"/>
+                        <ComboBox ItemsSource="{Binding Recording.DisplayChoices}" SelectedValuePath="Id"
+                                  SelectedValue="{Binding Recording.SelectedDisplayId}"/>
                     </DockPanel>
                     <DockPanel Style="{StaticResource Row}">
                         <TextBlock Style="{StaticResource RowLabel}" Text="{l:L マイク}"/>
-                        <ComboBox IsEnabled="False" ToolTip="{l:L まだ作っていません}"/>
+                        <l:LevelMeter DockPanel.Dock="Right" Width="60" Height="8" Margin="6,0,0,0" Value="{Binding Mic.Meter}"
+                                      ToolTip="{l:L 話したときに緑〜黄色まで振れればちょうどよい音量です}"/>
+                        <ComboBox ItemsSource="{Binding Mic.Choices}" SelectedValuePath="Id" SelectedValue="{Binding Mic.SelectedId}"/>
                     </DockPanel>
                     <DockPanel Style="{StaticResource Row}">
                         <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 映像}"/>

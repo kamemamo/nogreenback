@@ -39,7 +39,7 @@ public sealed record BackgroundChoice(string Id, string Label)
     public override string ToString() => Label;
 }
 
-public sealed partial class BackgroundSource : Observable, IDisposable
+public sealed class BackgroundSource : Observable, IDisposable
 {
     const string ScreenPrefix = "screen:";
 
@@ -168,9 +168,7 @@ public sealed partial class BackgroundSource : Observable, IDisposable
                     }
                     else
                     {
-                        var access = latest.Surface.As<IDirect3DDxgiInterfaceAccess>();
-                        var iid = typeof(ID3D11Texture2D).GUID;
-                        using var tex = new ID3D11Texture2D(access.GetInterface(ref iid));
+                        using var tex = CaptureInterop.GetTexture(latest);
                         texture.CopyFrom(gpu, tex, size.Width, size.Height);
                         hasFrame = true;
                     }
@@ -204,8 +202,8 @@ public sealed partial class BackgroundSource : Observable, IDisposable
         try
         {
             if (!GraphicsCaptureSession.IsSupported()) throw new NotSupportedException("Windows.Graphics.Capture");
-            var item = CreateItemForMonitor(display);
-            d3dDevice ??= CreateDirect3DDevice(gpu.Device);
+            var item = CaptureInterop.CreateItemForMonitor(display);
+            d3dDevice ??= CaptureInterop.CreateDirect3DDevice(gpu.Device);
             lock (gate)
             {
                 poolSize = item.Size;
@@ -227,24 +225,6 @@ public sealed partial class BackgroundSource : Observable, IDisposable
             MessageBox.Show(Loc.L("画面を背景にできません: %@", e.Message), "NoGreenBack", MessageBoxButton.OK, MessageBoxImage.Warning);
             model.Settings.BackgroundID = null;
         }
-    }
-
-    static GraphicsCaptureItem CreateItemForMonitor(DisplayInfo d)
-    {
-        var monitor = MonitorFromPoint(new POINT { X = d.Left + d.Width / 2, Y = d.Top + d.Height / 2 }, 2 /* MONITOR_DEFAULTTONEAREST */);
-        var interop = GraphicsCaptureItem.As<IGraphicsCaptureItemInterop>();
-        var iid = new Guid("79C3F95B-31F7-4EC2-A464-632EF5D30760");   // IGraphicsCaptureItem
-        var ptr = interop.CreateForMonitor(monitor, ref iid);
-        try { return GraphicsCaptureItem.FromAbi(ptr); }
-        finally { Marshal.Release(ptr); }
-    }
-
-    static IDirect3DDevice CreateDirect3DDevice(ID3D11Device device)
-    {
-        using var dxgi = device.QueryInterface<IDXGIDevice>();
-        Marshal.ThrowExceptionForHR(CreateDirect3D11DeviceFromDXGIDevice(dxgi.NativePointer, out var ptr));
-        try { return MarshalInterface<IDirect3DDevice>.FromAbi(ptr); }
-        finally { Marshal.Release(ptr); }
     }
 
     // ── キャプチャー機器 ──
@@ -394,26 +374,4 @@ public sealed partial class BackgroundSource : Observable, IDisposable
         Stop();
         lock (gate) texture.Dispose();
     }
-
-    [ComImport, Guid("3628E81B-3CAC-4C60-B7F4-23CE0E0C3356"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    interface IGraphicsCaptureItemInterop
-    {
-        IntPtr CreateForWindow(IntPtr window, ref Guid iid);
-        IntPtr CreateForMonitor(IntPtr monitor, ref Guid iid);
-    }
-
-    [ComImport, Guid("A9B3D012-3DF2-4EE3-B8D1-8695F457D3C1"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    interface IDirect3DDxgiInterfaceAccess
-    {
-        IntPtr GetInterface(ref Guid iid);
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    struct POINT { public int X, Y; }
-
-    [LibraryImport("user32.dll")]
-    private static partial IntPtr MonitorFromPoint(POINT pt, uint flags);
-
-    [LibraryImport("d3d11.dll")]
-    private static partial int CreateDirect3D11DeviceFromDXGIDevice(IntPtr dxgiDevice, out IntPtr graphicsDevice);
 }

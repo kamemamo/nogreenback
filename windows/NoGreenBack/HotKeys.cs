@@ -32,7 +32,7 @@ public sealed partial class HotKeys : IDisposable
         var st = model.State;
         Entries =
         [
-            new('R', "録画の開始・停止", () => { /* 録画を作ったらつなぐ */ }),
+            new('R', "録画の開始・停止", model.Recording.Toggle),
             new('P', "人物の表示・非表示", () => s.PersonOn = !s.PersonOn),
             new('C', "手書きを全部消す", model.ClearDrawing),
             new('D', "ペン (描画モード) のオン・オフ", () => st.PenLock = !st.PenLock),

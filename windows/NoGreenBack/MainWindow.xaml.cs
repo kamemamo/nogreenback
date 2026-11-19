@@ -64,6 +64,13 @@ public partial class MainWindow : Window
 
     void ClearButton_Click(object sender, RoutedEventArgs e) => model.ClearDrawing();
 
+    /// 押した時点ではボタンの色を変えず、録画が実際に始まった・止まったときに変える (SPEC.md 9 章)
+    void RecordButton_Click(object sender, RoutedEventArgs e)
+    {
+        RecordButton.SetCurrentValue(System.Windows.Controls.Primitives.ToggleButton.IsCheckedProperty, model.State.Recording);
+        model.Recording.Toggle();
+    }
+
     void HelpButton_Click(object sender, RoutedEventArgs e) => ToggleShortcutList();
 
     /// ショートカットの一覧を吹き出しで出す
