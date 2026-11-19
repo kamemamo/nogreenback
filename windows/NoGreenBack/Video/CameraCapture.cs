@@ -207,12 +207,12 @@ public sealed class CameraCapture : Observable, IDisposable
         finally { openLock.Release(); }
     }
 
-    static string Describe(MediaFrameFormat f) =>
+    internal static string Describe(MediaFrameFormat f) =>
         $"{f.VideoFormat.Width}x{f.VideoFormat.Height} {f.Subtype} {(f.FrameRate.Denominator > 0 ? (double)f.FrameRate.Numerator / f.FrameRate.Denominator : 0):0.##}fps";
 
     /// 横長で幅 1920 以下のうち最も大きい形式。その中で、フレームレートが選んだ値に最も近いもの、同じなら NV12 を選ぶ
     /// (縦横どちらも出せるカメラは、指定しないと縦長の枠に横長の映像を入れて送ってくるため)
-    static MediaFrameFormat? ChooseFormat(IReadOnlyList<MediaFrameFormat> formats, int targetFps)
+    internal static MediaFrameFormat? ChooseFormat(IReadOnlyList<MediaFrameFormat> formats, int targetFps)
     {
         static double Fps(MediaFrameFormat f) =>
             f.FrameRate is { Denominator: > 0 } r ? (double)r.Numerator / r.Denominator : 0;

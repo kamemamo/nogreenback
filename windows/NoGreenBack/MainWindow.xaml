@@ -212,7 +212,8 @@
                     <TextBlock Style="{StaticResource SectionHeader}" Text="{l:L 背景と全画面出力}"/>
                     <DockPanel Style="{StaticResource Row}">
                         <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 背景映像}"/>
-                        <ComboBox IsEnabled="False" ToolTip="{l:L まだ作っていません}"/>
+                        <ComboBox ItemsSource="{Binding Video.Background.Choices}" SelectedValuePath="Id"
+                                  SelectedValue="{Binding Video.Background.SelectedId}"/>
                     </DockPanel>
                     <DockPanel Style="{StaticResource Row}">
                         <TextBlock Style="{StaticResource RowLabel}" Text="{l:L 出す画面}"/>

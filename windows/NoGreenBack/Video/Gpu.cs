@@ -32,6 +32,7 @@ public sealed class Gpu : IDisposable
     // PSPresent: 縦横比を保って置き、透明な部分だけ市松模様 (明るい灰 0.8 と暗い灰 0.55)、外は黒
     // PSFill: p1 の色で塗る (ホワイトボードの板。プリマルチプライドα)
     // PSImage: 画像 (プリマルチプライドα) を rect に置く。外は何もしない
+    // PSOpaque: 背景映像を rect に不透明で置く (機器によってはαが 0 で届くので、αは使わない)。外は何もしない
     const string Shaders = """
         cbuffer Params : register(b0) { float4 rect; float4 p0; float4 p1; };
         Texture2D tex : register(t0);
@@ -70,6 +71,13 @@ public sealed class Gpu : IDisposable
             return tex.Sample(smp, q);
         }
 
+        float4 PSOpaque(VO i) : SV_Target
+        {
+            float2 q = (i.pos.xy - rect.xy) / rect.zw;
+            if (any(q < 0) || any(q > 1)) return 0;
+            return float4(tex.Sample(smp, q).rgb, 1);
+        }
+
         float4 PSPresent(VO i) : SV_Target
         {
             float2 q = (i.pos.xy - rect.xy) / rect.zw;
@@ -86,7 +94,7 @@ public sealed class Gpu : IDisposable
     public ID3D11DeviceContext Context { get; }
 
     readonly ID3D11VertexShader vs;
-    readonly ID3D11PixelShader psComposite, psPresent, psFill, psImage;
+    readonly ID3D11PixelShader psComposite, psPresent, psFill, psImage, psOpaque;
     readonly ID3D11SamplerState sampler;
     readonly ID3D11BlendState blendOver;   // プリマルチプライドαで上に重ねる
     readonly ID3D11Buffer paramsBuffer;
@@ -118,6 +126,9 @@ public sealed class Gpu : IDisposable
         psPresent = Device.CreatePixelShader(Compile("PSPresent", "ps_5_0"));
         psFill = Device.CreatePixelShader(Compile("PSFill", "ps_5_0"));
         psImage = Device.CreatePixelShader(Compile("PSImage", "ps_5_0"));
+        psOpaque = Device.CreatePixelShader(Compile("PSOpaque", "ps_5_0"));
+        // 画面の取り込み (Windows.Graphics.Capture) が別のスレッドからもこのデバイスを使うので、守りを付ける
+        using (var mt = Context.QueryInterface<ID3D11Multithread>()) mt.SetMultithreadProtected(true);
         sampler = Device.CreateSamplerState(SamplerDescription.LinearClamp);
         var blend = new BlendDescription();
         blend.RenderTarget[0] = new RenderTargetBlendDescription
@@ -176,17 +187,24 @@ public sealed class Gpu : IDisposable
     /// マスクを捨てる (モデルを読み込み直している間は人物を出さない)
     public void ClearMask() => hasMask = false;
 
-    /// キャンバスを合成する (奥から: 透明 → ホワイトボードの板 → 人物 → 重ねる画像 (キーボード・手書きの線・指し棒) の順)。
+    /// キャンバスを合成する (奥から: 透明 (背景映像があれば黒と背景映像) → ホワイトボードの板 → 人物 → 重ねる画像 (キーボード・手書きの線・指し棒) の順)。
+    /// 背景映像は、切らずに全部入るように縮めて真ん中に置く (比率が違うときの余りは黒)。
     /// 人物は personRect (x, y, 幅, 高さ) に置く。カメラのコマかマスクがまだないか、showPerson が false なら人物なし。
     /// board は板の濃さ (0 なら出さない)
     public void Compose(int canvasW, int canvasH, Vector4 personRect, bool mirror, bool showPerson, float gain,
-        float board, IReadOnlyList<(GpuImage Image, Vector4 Rect)> layers)
+        float board, IReadOnlyList<(GpuImage Image, Vector4 Rect)> layers, GpuImage? background = null)
     {
         EnsureCanvas(canvasW, canvasH);
-        Context.ClearRenderTargetView(canvasRtv!, new Color4(0, 0, 0, 0));
+        Context.ClearRenderTargetView(canvasRtv!, background?.Srv != null ? new Color4(0, 0, 0, 1) : new Color4(0, 0, 0, 0));
         Context.OMSetRenderTargets(canvasRtv!);
         Context.RSSetViewport(new Viewport(0, 0, canvasW, canvasH));
         Context.OMSetBlendState(blendOver);
+        if (background?.Srv != null && background.Width > 0 && background.Height > 0)
+        {
+            float sc = Math.Min((float)canvasW / background.Width, (float)canvasH / background.Height);
+            float bw = background.Width * sc, bh = background.Height * sc;
+            Draw(psOpaque, background.Srv, new ShaderParams { Rect = new Vector4((canvasW - bw) / 2, (canvasH - bh) / 2, bw, bh) });
+        }
         if (board > 0) Draw(psFill, null, new ShaderParams { P1 = new Vector4(board, board, board, board) });
         Context.PSSetShaderResource(1, hasMask ? maskSrv! : null!);
         Draw(psComposite, cameraSrv, new ShaderParams
@@ -265,7 +283,7 @@ public sealed class Gpu : IDisposable
         cameraSrv?.Dispose(); cameraTex?.Dispose();
         maskSrv?.Dispose(); maskTex?.Dispose();
         paramsBuffer.Dispose(); sampler.Dispose(); blendOver.Dispose();
-        psImage.Dispose(); psFill.Dispose(); psPresent.Dispose(); psComposite.Dispose(); vs.Dispose();
+        psOpaque.Dispose(); psImage.Dispose(); psFill.Dispose(); psPresent.Dispose(); psComposite.Dispose(); vs.Dispose();
         Context.Dispose(); Device.Dispose();
     }
 }
@@ -278,22 +296,32 @@ public sealed class GpuImage : IDisposable
     public int Width { get; private set; }
     public int Height { get; private set; }
 
+    void Ensure(Gpu gpu, int width, int height)
+    {
+        if (texture != null && Width == width && Height == height) return;
+        Srv?.Dispose(); texture?.Dispose();
+        texture = gpu.Device.CreateTexture2D(new Texture2DDescription
+        {
+            Width = (uint)width, Height = (uint)height, MipLevels = 1, ArraySize = 1,
+            Format = Format.B8G8R8A8_UNorm, SampleDescription = new SampleDescription(1, 0),
+            Usage = ResourceUsage.Default, BindFlags = BindFlags.ShaderResource,
+        });
+        Srv = gpu.Device.CreateShaderResourceView(texture);
+        Width = width; Height = height;
+    }
+
     public unsafe void Update(Gpu gpu, byte[] pixels, int width, int height)
     {
-        if (texture == null || Width != width || Height != height)
-        {
-            Srv?.Dispose(); texture?.Dispose();
-            texture = gpu.Device.CreateTexture2D(new Texture2DDescription
-            {
-                Width = (uint)width, Height = (uint)height, MipLevels = 1, ArraySize = 1,
-                Format = Format.B8G8R8A8_UNorm, SampleDescription = new SampleDescription(1, 0),
-                Usage = ResourceUsage.Default, BindFlags = BindFlags.ShaderResource,
-            });
-            Srv = gpu.Device.CreateShaderResourceView(texture);
-            Width = width; Height = height;
-        }
+        Ensure(gpu, width, height);
         fixed (byte* p = pixels)
             gpu.Context.UpdateSubresource(texture, 0, null, (IntPtr)p, (uint)(width * 4), 0);
+    }
+
+    /// GPU の上のテクスチャ (BGRA) の左上 width × height を写す (画面の取り込みのコマ)
+    public void CopyFrom(Gpu gpu, ID3D11Texture2D source, int width, int height)
+    {
+        Ensure(gpu, width, height);
+        gpu.Context.CopySubresourceRegion(texture!, 0, 0, 0, 0, source, 0, new Box(0, 0, 0, width, height, 1));
     }
 
     public void Dispose()

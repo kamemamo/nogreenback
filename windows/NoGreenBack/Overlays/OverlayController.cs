@@ -68,6 +68,7 @@ public sealed partial class OverlayController : IDisposable
         model.Displays.Changed += _ => { Cover(); UpdateAll(); };
         model.Outputs.Changed += UpdateAll;
         model.Video.CanvasChanged += _ => { annotationDirty = true; UpdateKeyboard(); };
+        model.Video.Background.Changed += UpdateAll;
 
         timer = new DispatcherTimer(TimeSpan.FromMilliseconds(1000.0 / 60), DispatcherPriority.Input, (_, _) => Tick(), Dispatcher.CurrentDispatcher);
         // 1 秒ごとに重なり順を並べ直す (スライドショーなど、あとから最前面に出たウィンドウに隠されないように)
@@ -121,7 +122,6 @@ public sealed partial class OverlayController : IDisposable
 
         // ホワイトボード: 映像には背景の上・人物の後ろに入れる。全画面出力を出していなければ「表示する画面」に板のウィンドウを出す
         bool board = st.WhiteboardOn && s.AnnotationOn;
-        model.Video.BoardOpacity = board ? (float)s.BoardOpacity : 0;
         var overlayDisplay = model.Displays.OverlayDisplay;
         if (board && full == null && overlayDisplay is { } od)
         {
@@ -130,6 +130,9 @@ public sealed partial class OverlayController : IDisposable
             boardWindow.ShowNoActivate();
         }
         else if (boardWindow.IsVisible) boardWindow.Hide();
+        // 板を出している画面を背景にしているときは、取り込んだ背景にもう板が入っているので、映像には重ねない (二重にしない)
+        bool boardInBackground = boardWindow.IsVisible && model.Video.Background.ScreenName == overlayDisplay?.Name;
+        model.Video.BoardOpacity = board && !boardInBackground ? (float)s.BoardOpacity : 0;
 
         UpdateKeyboard();
 
@@ -307,6 +310,22 @@ public sealed partial class OverlayController : IDisposable
         order.AddRange(annotations.Windows.Select(w => w.Hwnd));
         order.Add(pointerWindow.Hwnd);
         OverlayWindow.Arrange(order);
+        ExcludeFromCapture();
+    }
+
+    bool excluded;
+
+    /// 画面を背景にしている間は、このアプリのウィンドウを画面の取り込みから外す (合わせ鏡にならないように)。
+    /// 手書きとホワイトボードのウィンドウは外さない (全画面出力に手書きが入るように)。
+    /// ほかのアプリの画面共有からも消えるので、画面を背景にしていない間は外さない
+    void ExcludeFromCapture()
+    {
+        bool exclude = model.Video.Background.ScreenName != null;
+        if (!exclude && !excluded) return;
+        excluded = exclude;
+        var main = Application.Current?.MainWindow is { } mw ? new System.Windows.Interop.WindowInteropHelper(mw).Handle : IntPtr.Zero;
+        foreach (var h in new[] { main, model.Outputs.WipeHwnd, model.Outputs.FullHwnd, keyboardWindow.Hwnd, pointerWindow.Hwnd })
+            if (h != IntPtr.Zero) SetWindowDisplayAffinity(h, exclude ? 0x11u /* WDA_EXCLUDEFROMCAPTURE */ : 0u);
     }
 
     static byte[] Pixels(BitmapSource bmp)
@@ -347,4 +366,8 @@ public sealed partial class OverlayController : IDisposable
 
     [LibraryImport("user32.dll")]
     private static partial short GetAsyncKeyState(int vk);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SetWindowDisplayAffinity(IntPtr hwnd, uint affinity);
 }

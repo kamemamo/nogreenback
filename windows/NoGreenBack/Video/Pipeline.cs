@@ -74,6 +74,9 @@ public sealed class Pipeline : Observable, IDisposable
 
     public CameraCapture Camera { get; }
 
+    /// 背景映像 (キャプチャー機器・この PC の画面)
+    public BackgroundSource Background { get; }
+
     /// 操作ウィンドウに出すお知らせ (切り抜きのモデルがないとき。空なら出さない)
     public string Message { get; }
 
@@ -83,6 +86,7 @@ public sealed class Pipeline : Observable, IDisposable
         gpu = new Gpu();
         Camera = new CameraCapture(model.Settings);
         Camera.FrameArrived += OnCameraFrame;
+        Background = new BackgroundSource(model, gpu, gate, Camera);
 
         idleTimer = new Timer(_ => OnIdleTick(), null, 40, 40);
 
@@ -138,6 +142,7 @@ public sealed class Pipeline : Observable, IDisposable
             }
 
             gpu.UploadCamera(pixels, width, height);
+            Background.OfferCameraFrame(pixels, width, height);
             cameraW = width; cameraH = height;
             ComposeAndPresent();
         }
@@ -212,7 +217,8 @@ public sealed class Pipeline : Observable, IDisposable
         }
 
         bool hasCamera = Camera.MillisecondsSinceLastFrame < 500;
-        gpu.Compose(canvasW, canvasH, personRect, s.Mirror, s.PersonOn && hasCamera, gain, Volatile.Read(ref boardOpacity), layers);
+        gpu.Compose(canvasW, canvasH, personRect, s.Mirror, s.PersonOn && hasCamera, gain, Volatile.Read(ref boardOpacity), layers,
+            Background.Pull());
         Interlocked.Increment(ref composedCount);
 
         if (preview != null && previewVisible) preview.Present(checkerboard: true);
@@ -282,6 +288,7 @@ public sealed class Pipeline : Observable, IDisposable
         idleTimer.Dispose();
         Camera.FrameArrived -= OnCameraFrame;
         Camera.Dispose();
+        Background.Dispose();
         lock (gate)
         {
             disposed = true;
