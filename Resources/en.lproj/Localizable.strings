@@ -72,6 +72,10 @@
 "キーを押さなくても描ける状態にします。オンの間は後ろのアプリをクリックできません。%@D" = "Lets you draw without holding a key. While on, you can't click the apps behind. %@D";
 "消去" = "Clear";
 "手書きを全部消します。%@C でも消せます" = "Clears all drawings. %@C also clears";
+"ホワイトボード" = "Whiteboard";
+"画面に半透明の白い板を敷いて、手書きの線を見やすくします。人物は板の手前に出ます。%@W" = "Lays a translucent white board over the screen so drawings are easier to see. The person stays in front of the board. %@W";
+"ホワイトボードの白さ。濃くするほど後ろの画面が見えにくくなります" = "How white the whiteboard is. Higher values hide more of the screen behind it";
+"ボードの濃さ" = "Board opacity";
 "キーボード" = "Keyboard";
 "キーボード (JIS / US 配列・テンキー付き。Mac と Windows のキーの名前入り) の絵を出します。手書きで「このキー」と示すときに使います。%@B" = "Shows a keyboard (JIS or US layout with numeric keypad, Mac and Windows key names). Use it with drawing to point out keys. %@B";
 "指し棒" = "Pointer";
@@ -149,6 +153,7 @@
 "字幕のオン・オフ" = "Subtitles on or off";
 "キーボードの表示・非表示" = "Show or hide the keyboard";
 "指し棒のオン・オフ" = "Pointer on or off";
+"ホワイトボードの表示・非表示" = "Show or hide the whiteboard";
 "次のショートカットは他のアプリが使っているため登録できませんでした:\n" = "These shortcuts couldn't be registered because other apps use them:\n";
 "（他のアプリが使用中のため使えません）" = " (unavailable: used by another app)";
 "上のショートカットは、他のアプリを操作中でも効きます。Stream Deck では「ホットキー」アクションにこの組み合わせを設定します。" = "The shortcuts above work even while you use other apps. In Stream Deck, assign these combinations to a Hotkey action.";

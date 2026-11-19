@@ -137,8 +137,14 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
         get { previewLock.lock(); defer { previewLock.unlock() }; return _pointer }
         set { previewLock.lock(); _pointer = newValue; previewLock.unlock() }
     }
+    private var _board: Double?
+    /// ホワイトボードの濃さ 0...1 (nil なら出さない)。背景の上・人物の後ろに半透明の白い板を敷く
+    var board: Double? {
+        get { previewLock.lock(); defer { previewLock.unlock() }; return _board }
+        set { previewLock.lock(); _board = newValue; previewLock.unlock() }
+    }
     /// 映像に重ねるキーボード (nil なら出さない)。大きさは映像の横幅に対する割合
-    private var _keyboard: (scale: Double, position: KeyboardRenderer.Position)?
+    private var _keyboard:(scale: Double, position: KeyboardRenderer.Position)?
     private var keyboardCache: (key: String, image: CIImage?)?
     var keyboard: (scale: Double, position: KeyboardRenderer.Position)? {
         get { previewLock.lock(); defer { previewLock.unlock() }; return _keyboard }
@@ -419,6 +425,8 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
         let py = (corner == .bottomRight || corner == .bottomLeft) ? 0 : canvas.height - ph   // 左下原点
         let person = cutout.transformed(by: CGAffineTransform(scaleX: ps, y: ps)
             .concatenating(CGAffineTransform(translationX: px, y: py)))
+        // ホワイトボード: 背景の上・人物の後ろに敷く半透明の白い板 (手書きの線を見やすくする)
+        let plate = board.map { CIImage(color: CIColor(red: 1, green: 1, blue: 1, alpha: CGFloat($0))).cropped(to: canvas) }
         // プレビューと全画面出力に出す映像
         var display: CIImage
         if let bg = background.latestImage {
@@ -430,13 +438,15 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
             let fitted = bg.transformed(by: CGAffineTransform(scaleX: s, y: s)
                 .concatenating(CGAffineTransform(translationX: tx, y: ty)))
             let black = CIImage(color: .black).cropped(to: canvas)
-            display = person.composited(over: fitted.composited(over: black)).cropped(to: canvas)
+            var under = fitted.composited(over: black)
+            if let plate { under = plate.composited(over: under) }
+            display = person.composited(over: under).cropped(to: canvas)
             source = display
         } else {
             // 背景なし: Syphon には人物を元の大きさで送り (OBS 側で配置する)、
             // プレビューと全画面出力では、背景ありのときと同じ位置・大きさにする
-            // (透明な下地を敷いて、映像の大きさを元のままにする)
-            display = person.composited(over: CIImage(color: .clear).cropped(to: canvas)).cropped(to: canvas)
+            // (透明な下地を敷いて、映像の大きさを元のままにする。ホワイトボードは Syphon には入れない)
+            display = person.composited(over: plate ?? CIImage(color: .clear).cropped(to: canvas)).cropped(to: canvas)
         }
 
         // キーの説明用のキーボードを重ねる (手書きの線より下。背景があるときは Syphon にも)
@@ -866,6 +876,58 @@ final class Annotations {
     func orderOut() { shown = false; windows.forEach { $0.orderOut(nil) } }
 }
 
+// MARK: - ホワイトボード (手書きの線を見やすくする半透明の板)
+
+/// 画面全体に敷く半透明の白い板。ほかのアプリ (スライドショーも) より手前、
+/// 画面に重ねる人物のすぐ後ろに置く (字幕・キーボード・手書きの線はさらに手前)。クリックは後ろへ通す
+final class BoardWindow: NSPanel {
+    private var keepFrontTimer: Timer?
+    /// この板より手前に出しておくウィンドウ (画面に重ねる人物)
+    weak var above: NSWindow?
+
+    init() {
+        super.init(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+                   styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = false
+        ignoresMouseEvents = true
+        isReleasedWhenClosed = false
+        isFloatingPanel = true
+        hidesOnDeactivate = false
+        // 出すときに縮んだ板が広がるアニメーションをしない (一瞬、画面の縁だけ白くならないことがある)
+        animationBehavior = .none
+        // 人物の表示と同じ層 (Keynote や PowerPoint のスライドショーより上)
+        level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()))
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+    }
+
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+
+    func show(on screen: NSScreen, opacity: Double) {
+        backgroundColor = NSColor(white: 1, alpha: opacity)
+        if frame != screen.frame { setFrame(screen.frame, display: true) }
+        bringFront()
+        guard keepFrontTimer == nil else { return }
+        // 同じ層に後から出たウィンドウ (スライドショーを始めたときなど) に隠されないよう、定期的に前へ戻す
+        let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.bringFront() }
+        RunLoop.main.add(t, forMode: .common)
+        keepFrontTimer = t
+    }
+
+    func hide() {
+        keepFrontTimer?.invalidate()
+        keepFrontTimer = nil
+        orderOut(nil)
+    }
+
+    /// 人物を出していれば、そのすぐ後ろに並べる
+    private func bringFront() {
+        if let above, above.isVisible { order(.below, relativeTo: above.windowNumber) } else { orderFrontRegardless() }
+    }
+}
+
 // MARK: - アプリ本体
 
 /// 上部のオン・オフボタン。背景を自分で塗る
@@ -1138,6 +1200,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         var n = (annotation?.windows.filter { $0 !== covered }.map(\.windowNumber) ?? [])
         if let overlay { n.append(overlay.windowNumber) }
         if let outputWindow { n.append(outputWindow.windowNumber) }
+        if boardWindow.isVisible { n.append(boardWindow.windowNumber) }
         // キーボードも録画に映す (説明に使うため)
         if keyboardWindow.isVisible { n.append(keyboardWindow.windowNumber) }
         if pointerWindow.isVisible { n.append(pointerWindow.windowNumber) }
@@ -1299,6 +1362,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         didSet { penButton.state = penLatched ? .on : .off }
     }
     var penButton = NSButton()
+    /// ホワイトボード (起動するたびにオフから始める)
+    var whiteboardOn = false
+    var whiteboardButton = NSButton()
+    lazy var boardWindow = BoardWindow()
+    var boardOpacity: Double {
+        get { let v = UserDefaults.standard.double(forKey: "boardOpacity"); return v > 0 ? v : 0.7 }
+        set { UserDefaults.standard.set(newValue, forKey: "boardOpacity") }
+    }
     /// 「切り抜きの調整」を開いておくか
     var tuningOpen: Bool {
         get { UserDefaults.standard.bool(forKey: "tuningOpen") }
@@ -1403,6 +1474,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         outputWindow?.orderOut(nil)
         subtitleWindow.orderOut(nil)
         keyboardWindow.orderOut(nil)
+        boardWindow.hide()
         pointerTimer?.invalidate()
         pointerTimer = nil
         pointerWindow.orderOut(nil)
@@ -1622,6 +1694,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         let clearButton = NSButton(title: L("消去"), target: self, action: #selector(clearAnnotation))
         clearButton.controlSize = .large
         clearButton.toolTip = L("手書きを全部消します。%@C でも消せます", HotKeys.modifierSymbols)
+        whiteboardButton = toolbarToggle(L("ホワイトボード"), #selector(whiteboardToggled(_:)))
+        whiteboardButton.toolTip = L("画面に半透明の白い板を敷いて、手書きの線を見やすくします。人物は板の手前に出ます。%@W", HotKeys.modifierSymbols)
+        let boardSlider = NSSlider(value: boardOpacity, minValue: 0.3, maxValue: 0.95,
+                                   target: self, action: #selector(boardOpacityChanged(_:)))
+        boardSlider.toolTip = L("ホワイトボードの白さ。濃くするほど後ろの画面が見えにくくなります")
         setAnnotationVisible(annotationOn)
 
         // キーの説明用のキーボード
@@ -1723,7 +1800,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         // 上部: 本番中に触るボタンだけを並べる (オンのときは色が付く)
         let toolbar = NSStackView(views: [
             personButton, outputCheck, overlayCheck, subtitleButton, termsButton, toolbarSeparator(),
-            annotationCheck, penButton, clearButton, keyboardButton, pointerButton, atemToolbarGroup, NSView(),
+            annotationCheck, penButton, whiteboardButton, clearButton, keyboardButton, pointerButton, atemToolbarGroup, NSView(),
             recordButton, recordLabel, fpsLabel, helpButton,
         ])
         toolbar.orientation = .horizontal
@@ -1804,7 +1881,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
             sectionHeader(L("背景と全画面出力")),
             sideGrid([(L("背景映像"), bgPopup), (L("出す画面"), outputScreenPopup), (L("映像の比率"), aspectPopup)]),
             sectionHeader(L("手書き")),
-            sideGrid([(L("描くキー"), keyPopup), (L("色"), penRow), (L("太さ"), widthSlider)]),
+            sideGrid([(L("描くキー"), keyPopup), (L("色"), penRow), (L("太さ"), widthSlider),
+                      (L("ボードの濃さ"), boardSlider)]),
             sectionHeader(L("キーボード")),
             sideGrid([(L("配列"), keyboardLayoutPopup), (L("位置"), keyboardPositionPopup), (L("大きさ"), keyboardSizeSlider)]),
             sectionHeader(L("録画")),
@@ -2196,13 +2274,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
 
     /// 選んでいる背景を使い始める (restartScreen: 画面の構成が変わったときに、画面の取り込みをやり直す)
     func applyBackground(restartScreen: Bool = false, reopenDevice: Bool = false) {
+        // 背景にする画面が変わると、ホワイトボードを映像に重ねるかどうかも変わる
+        defer { updateWhiteboard() }
         let id = bgPopup.selectedItem?.representedObject as? String
         if let id, id.hasPrefix("screen:") {
             let name = String(id.dropFirst("screen:".count))
             guard let screen = NSScreen.screens.first(where: { $0.localizedName == name }) else { return }
             if !restartScreen, processor.background.screenName == name { return }
-            // 手書きの線は背景にも映す (全画面出力に手書きが入るように)
-            let keep = annotation?.windows.map(\.windowNumber) ?? []
+            // 手書きの線とホワイトボードは背景にも映す (全画面出力に手書きが入るように)
+            let keep = (annotation?.windows.map(\.windowNumber) ?? []) + [boardWindow.windowNumber]
             processor.background.startScreen(screen, keepWindows: keep) { [weak self] msg in
                 self?.showAlert(L("画面を背景にできません: %@\n\n初回は「システム設定 > プライバシーとセキュリティ > 画面収録」で NoGreenBack を許可し、アプリを開き直してください。", msg))
                 self?.bgPopup.selectItem(at: 0)
@@ -2370,6 +2450,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         overlay?.setVisible(overlayOn && personOn && !covered)
         settings.showPerson = personOn
         updateKeyboard()
+        updateWhiteboard()
     }
 
     // MARK: 指し棒
@@ -2482,6 +2563,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         updateDrawableScreens()
         // 人物の位置が変わったら、キーボードを反対側へ
         if keyboardButton.state == .on { updateKeyboard() }
+        updateWhiteboard()
     }
 
     // MARK: 全体で効くショートカット (Stream Deck の「ホットキー」から使う)
@@ -2498,6 +2580,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
             ("S", kVK_ANSI_S, L("字幕のオン・オフ"), { [weak self] in self?.toggleSubtitles() }),
             ("B", kVK_ANSI_B, L("キーボードの表示・非表示"), { [weak self] in self?.toggleKeyboard() }),
             ("L", kVK_ANSI_L, L("指し棒のオン・オフ"), { [weak self] in self?.togglePointer() }),
+            ("W", kVK_ANSI_W, L("ホワイトボードの表示・非表示"), { [weak self] in self?.toggleWhiteboard() }),
         ]
     }
 
@@ -2990,8 +3073,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
 
     @objc func annotationToggled(_ sender: NSButton) {
         annotationOn = sender.state == .on
-        if !annotationOn { penLatched = false }
+        if !annotationOn { penLatched = false; whiteboardOn = false }
         setAnnotationVisible(annotationOn)
+        updateWhiteboard()
+    }
+
+    // MARK: ホワイトボード
+
+    /// 板は映像 (プレビュー・全画面出力・背景があれば Syphon) に入れる。
+    /// 全画面出力を出している間は、全画面出力の画面 (録画する画面) だけにして、操作ウィンドウのある画面などには出さない。
+    /// 全画面出力を出していないときは「表示する画面」に板のウィンドウを出す
+    func updateWhiteboard() {
+        let on = whiteboardOn && annotationOn
+        whiteboardButton.state = on ? .on : .off
+        if on && outputWindow == nil {
+            boardWindow.above = overlay
+            boardWindow.show(on: overlayScreen, opacity: boardOpacity)
+        } else {
+            boardWindow.hide()
+        }
+        // 板を出している画面を背景にしているときは、取り込んだ背景にもう板が入っているので映像には重ねない
+        let inBackground = boardWindow.isVisible && processor.background.screenName == overlayScreen.localizedName
+        processor.board = on && !inBackground ? boardOpacity : nil
+        updateRecordedWindows()
+    }
+
+    @objc func whiteboardToggled(_ sender: NSButton) {
+        whiteboardOn = sender.state == .on
+        // ホワイトボードは手書きの一部。手書きがオフならオンにする
+        if whiteboardOn && !annotationOn {
+            annotationCheck.state = .on
+            annotationToggled(annotationCheck)
+        }
+        updateWhiteboard()
+    }
+    func toggleWhiteboard() {
+        whiteboardButton.state = whiteboardOn ? .off : .on
+        whiteboardToggled(whiteboardButton)
+    }
+    @objc func boardOpacityChanged(_ sender: NSSlider) {
+        boardOpacity = sender.doubleValue
+        updateWhiteboard()
     }
     @objc func drawKeyChanged(_ sender: NSPopUpButton) { drawKeyIndex = sender.indexOfSelectedItem }
     @objc func penColorChanged(_ sender: NSPopUpButton) {

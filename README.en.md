@@ -36,7 +36,7 @@ The first build clones Syphon-Framework into `vendor/` and builds it. To support
 
 ## The window
 
-- **Toolbar**: only what you use while presenting — Person, Full Screen, PiP, Subtitles (and the subtitle settings button), Draw, Pen Lock, Clear, Keyboard, Pointer, ATEM inputs, ● Record, the frame rate, and ? (shortcuts and tips). Toggles are colored while on (red while recording).
+- **Toolbar**: only what you use while presenting — Person, Full Screen, PiP, Subtitles (and the subtitle settings button), Draw, Pen Lock, Whiteboard, Clear, Keyboard, Pointer, ATEM inputs, ● Record, the frame rate, and ? (shortcuts and tips). Toggles are colored while on (red while recording).
 - **Left**: preview (transparent areas show a checkerboard).
 - **Right sidebar**: settings grouped by Camera, Cut-out Tuning, Person Position and Size, Background and Full-Screen Output, Draw, Keyboard, Recording, External Audio and ATEM Switcher.
 - **Shortcuts**: the ? button, Help > Keyboard Shortcuts, or ⌘/.
@@ -83,6 +83,7 @@ Turn on **Draw** to draw on the screen.
 - Choose color, width, and whether lines fade after 3 or 10 seconds.
 - While **Full Screen** is on, you can draw only on the output screen and the screen being recorded. Other screens, such as the one with the control window, stay usable with the mouse even while you hold the draw key or Pen Lock is on. Turning off Full Screen also turns off Pen Lock.
 - Works on every connected screen, including pen displays. **Pen Lock** (⌃⌥⌘ D) lets you draw without holding a key.
+- **Whiteboard** (⌃⌥⌘ W): turn on Whiteboard to lay a translucent white board behind your drawings so they're easier to see. While Full Screen is on, it appears only on the full-screen output (the screen you record): the board goes into the composited video (so it's also in the preview, and in Syphon when there's a background) and isn't shown on other screens, such as the one with the control window. When Full Screen is off, it covers the display screen. The person stays in front of the board, with subtitles, the keyboard and drawings in front of that. Clicks go through the board to the apps behind. Change how white it is with "Board opacity". Turning off Draw also turns off the whiteboard.
 
 ### Keyboard
 
@@ -155,6 +156,7 @@ These work even while other apps are in front. In Stream Deck, assign them to a 
 | ⌃⌥⌘ S | Subtitles on or off |
 | ⌃⌥⌘ B | Show or hide the keyboard |
 | ⌃⌥⌘ L | Pointer on or off |
+| ⌃⌥⌘ W | Show or hide the whiteboard |
 
 If another app already uses a combination, it can't be registered and you'll be told at launch.
 
