@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/Tools/">
+    <Project Path="Tools/MakeIcon/MakeIcon.csproj" />
     <Project Path="Tools/SegBench/SegBench.csproj" />
     <Project Path="Tools/SpoutCheck/SpoutCheck.csproj" />
     <Project Path="Tools/WhisperBench/WhisperBench.csproj" />

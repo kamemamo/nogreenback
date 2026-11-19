@@ -23,6 +23,12 @@ windows/NoGreenBack/bin/Debug/net10.0-windows10.0.22621.0/NoGreenBack.exe
 
 英語の表示を確かめるときは、環境変数 `NOGREENBACK_LANG=en` を付けて起動します。
 
+アイコン（`NoGreenBack/Resources/AppIcon.ico`）は、Mac 版と同じ `Icons/AppIcon.png` から作っています。Mac のアイコンにある周りの透明な余白を詰め、16〜256 px の 9 つの大きさを入れています。`Icons/AppIcon.png` を変えたら、次で作り直します。
+
+```bash
+dotnet run --project windows/Tools/MakeIcon
+```
+
 ## できていること
 
 - 操作ウィンドウの骨組み（上部のボタン、プレビューの場所、サイドバー）
