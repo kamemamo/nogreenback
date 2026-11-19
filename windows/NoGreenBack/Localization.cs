@@ -90,11 +90,27 @@ public static partial class Loc
 }
 
 /// XAML から {l:L 日本語の文} で訳を引く。
-/// 文の中の %@ にショートカットの修飾キー (Ctrl+Alt+Shift+) を入れるときは {l:L '…%@P', Shortcut=True}
+/// 文の中の %@ にショートカットの修飾キー (Ctrl+Alt+Shift+ など) を入れるときは {l:L '…%@P', Shortcut=True}。
+/// 修飾キーを替えたら文字も変わるよう、そのときは修飾キーへのバインディングにする
 public sealed class LExtension(string key) : MarkupExtension
 {
     public string Key { get; set; } = key;
     public bool Shortcut { get; set; }
-    public override object ProvideValue(IServiceProvider serviceProvider) =>
-        Shortcut ? Loc.L(Key, HotKeys.Prefix) : Loc.L(Key);
+    public override object ProvideValue(IServiceProvider serviceProvider)
+    {
+        if (!Shortcut) return Loc.L(Key);
+        var binding = new System.Windows.Data.Binding(nameof(HotKeys.PrefixSource.Prefix))
+        {
+            Source = HotKeys.PrefixSource.Instance,
+            Mode = System.Windows.Data.BindingMode.OneWay,
+            Converter = new ShortcutTextConverter(Key),
+        };
+        return binding.ProvideValue(serviceProvider);
+    }
+
+    sealed class ShortcutTextConverter(string key) : System.Windows.Data.IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture) => Loc.L(key, (string)value);
+        public object ConvertBack(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture) => throw new NotSupportedException();
+    }
 }

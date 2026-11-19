@@ -28,7 +28,8 @@ windows/NoGreenBack/bin/Debug/net10.0-windows10.0.22621.0/NoGreenBack.exe
 - 操作ウィンドウの骨組み（上部のボタン、プレビューの場所、サイドバー）
 - 設定の保存（`%APPDATA%\NoGreenBack\settings.json`。キーの名前は Mac 版と同じ）
 - 表示の言語（英語の訳は Mac 版の `Resources/en.lproj/Localizable.strings` をそのまま読み、Windows だけの文は `NoGreenBack/Resources/en.strings` に書く）
-- ほかのアプリが前面でも効くショートカットの登録と、ショートカットの一覧（Ctrl+/）
+- ほかのアプリが前面でも効くショートカットの登録と、ショートカットの一覧（Ctrl+/）。修飾キーは一覧の「組み合わせ」で Ctrl+Alt+Shift（既定）か Ctrl+Alt+Win を選ぶ
+- 二重起動を防ぐ（2 つ目は、先に動いている方を前に出して終わる）
 - ボタンどうしの決まり（ペン固定をオンにすると手書きもオン、全画面を外すとペン固定も外れる、など）
 - カメラの取り込み（`Video/CameraCapture.cs`）: 形式の選び方、遅れたコマを捨てる、3 秒コマがなければ開き直す、あとからつないだカメラを自動で開く
 - Direct3D 11 での合成とプレビュー（`Video/Gpu.cs`、`Video/Pipeline.cs`）: 人物の位置・大きさ・左右反転・「人物」のオン・オフ、透明な部分の市松模様、カメラがないときの 25 回/秒の合成、フレームレートの表示

@@ -80,6 +80,12 @@ public sealed class Settings : Observable
     /// 0 出す画面に合わせる, 1 カメラと同じ
     [JsonIgnore] public int AspectIndex { get => MatchOutputAspect ? 0 : 1; set => MatchOutputAspect = value == 0; }
 
+    // ── ショートカット (Windows だけ) ──
+    /// どこからでも使えるショートカットの修飾キー: 0 Ctrl+Alt+Shift (既定), 1 Ctrl+Alt+Win。
+    /// ほかのアプリと同じ組み合わせがぶつかる PC で替えられるようにする (SPEC.md 14・17 章)
+    int hotKeyModifiers;
+    [JsonPropertyName("hotKeyModifiers")] public int HotKeyModifiers { get => hotKeyModifiers; set => Set(ref hotKeyModifiers, Math.Clamp(value, 0, 1)); }
+
     // ── 手書き ──
     bool annotationOn;
     [JsonPropertyName("annotationOn")] public bool AnnotationOn { get => annotationOn; set => Set(ref annotationOn, value); }

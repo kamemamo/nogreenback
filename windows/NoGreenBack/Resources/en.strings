@@ -24,3 +24,7 @@
 "マイクを開けません: %@" = "Can't open the microphone: %@";
 "マイクへのアクセスが許可されていません。\n設定 > プライバシーとセキュリティ > マイク で、「デスクトップ アプリがマイクにアクセスできるようにする」をオンにしてください。" = "Microphone access isn't allowed.\nIn Settings > Privacy & security > Microphone, turn on \"Let desktop apps access your microphone\".";
 "話したときに緑〜黄色まで振れればちょうどよい音量です" = "The level is right when it reaches green to yellow as you speak";
+"組み合わせ" = "Modifiers";
+"＋キー" = " + key";
+"ほかのアプリが同じ組み合わせを使っていて効かないときに替えます。Stream Deck などに設定した組み合わせも替えてください" = "Change this when another app uses the same combination. Update the combination set in Stream Deck and similar tools too";
+"ショートカットの一覧 (Ctrl+/) の「組み合わせ」で、ほかの組み合わせに替えられます。" = "You can switch to another combination with \"Modifiers\" in the shortcut list (Ctrl+/).";

@@ -1,6 +1,8 @@
 // ほかのアプリが前面にあっても効くショートカット (SPEC.md 14 章)
-// Windows では Ctrl+Alt+Shift＋キー (SPEC.md 17 章)。RegisterHotKey で登録し、操作ウィンドウのメッセージで受け取る。
+// Windows では修飾キー＋キー。修飾キーは Ctrl+Alt+Shift (既定) か Ctrl+Alt+Win から選ぶ (SPEC.md 17 章)。
+// RegisterHotKey で登録し、操作ウィンドウのメッセージで受け取る。修飾キーを替えたら登録し直す。
 
+using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Windows.Interop;
 
@@ -8,7 +10,15 @@ namespace NoGreenBack;
 
 public sealed partial class HotKeys : IDisposable
 {
-    public const string Prefix = "Ctrl+Alt+Shift+";
+    /// 選べる修飾キー (Settings.HotKeyModifiers の番号の順)
+    public static readonly (string Text, uint Mods)[] ModifierChoices =
+    [
+        ("Ctrl+Alt+Shift", MOD_CONTROL | MOD_ALT | MOD_SHIFT),
+        ("Ctrl+Alt+Win", MOD_CONTROL | MOD_ALT | MOD_WIN),
+    ];
+
+    /// いまの修飾キーの表示 (末尾に + を付けたもの。例: Ctrl+Alt+Shift+)。画面の文字はこれに追従する
+    public static string Prefix => PrefixSource.Instance.Prefix;
 
     public sealed record Entry(char Key, string Description, Action Action)
     {
@@ -20,10 +30,11 @@ public sealed partial class HotKeys : IDisposable
     public IReadOnlyList<Entry> Entries { get; }
 
     const int WM_HOTKEY = 0x0312;
-    const uint MOD_ALT = 0x1, MOD_CONTROL = 0x2, MOD_SHIFT = 0x4, MOD_NOREPEAT = 0x4000;
+    const uint MOD_ALT = 0x1, MOD_CONTROL = 0x2, MOD_SHIFT = 0x4, MOD_WIN = 0x8, MOD_NOREPEAT = 0x4000;
     const int BaseId = 0x4E47; // 'NG'
 
     readonly HwndSource source;
+    bool registered;
 
     public HotKeys(HwndSource source, AppModel model)
     {
@@ -43,13 +54,32 @@ public sealed partial class HotKeys : IDisposable
             new('L', "指し棒のオン・オフ", () => st.PointerOn = !st.PointerOn),
             new('W', "ホワイトボードの表示・非表示", () => st.WhiteboardOn = !st.WhiteboardOn),
         ];
+        source.AddHook(Hook);
+        Register(s.HotKeyModifiers);
+    }
 
+    /// 修飾キー (ModifierChoices の番号) で登録し直す。登録できなかったものは Unavailable になる
+    public void Register(int modifiers)
+    {
+        Unregister();
+        var (text, mods) = ModifierChoices[Math.Clamp(modifiers, 0, ModifierChoices.Length - 1)];
+        PrefixSource.Instance.Prefix = text + "+";
         for (int i = 0; i < Entries.Count; i++)
         {
             var e = Entries[i];
-            e.Unavailable = !RegisterHotKey(source.Handle, BaseId + i, MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, e.Key);
+            e.Unavailable = !RegisterHotKey(source.Handle, BaseId + i, mods | MOD_NOREPEAT, e.Key);
         }
-        source.AddHook(Hook);
+        registered = true;
+        var failed = Entries.Where(e => e.Unavailable).Select(e => e.Key);
+        Log.Write($"ショートカット: {text}+キー" + (failed.Any() ? $" (登録できない: {string.Join(" ", failed)})" : ""));
+    }
+
+    void Unregister()
+    {
+        if (!registered) return;
+        for (int i = 0; i < Entries.Count; i++)
+            if (!Entries[i].Unavailable) UnregisterHotKey(source.Handle, BaseId + i);
+        registered = false;
     }
 
     IntPtr Hook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -65,8 +95,20 @@ public sealed partial class HotKeys : IDisposable
     public void Dispose()
     {
         source.RemoveHook(Hook);
-        for (int i = 0; i < Entries.Count; i++)
-            if (!Entries[i].Unavailable) UnregisterHotKey(source.Handle, BaseId + i);
+        Unregister();
+    }
+
+    /// 画面の文字 (ツールチップなど) が、修飾キーを替えたときに追従するための元
+    public sealed class PrefixSource : INotifyPropertyChanged
+    {
+        public static PrefixSource Instance { get; } = new();
+        string prefix = ModifierChoices[0].Text + "+";
+        public string Prefix
+        {
+            get => prefix;
+            set { if (prefix != value) { prefix = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Prefix))); } }
+        }
+        public event PropertyChangedEventHandler? PropertyChanged;
     }
 
     [LibraryImport("user32.dll", SetLastError = true)]

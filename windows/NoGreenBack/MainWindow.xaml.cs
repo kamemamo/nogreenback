@@ -27,17 +27,19 @@ public partial class MainWindow : Window
         SourceInitialized += (_, _) =>
         {
             hotKeys = new HotKeys((HwndSource)PresentationSource.FromVisual(this), model);
-            var failed = hotKeys.Entries.Where(e => e.Unavailable).ToList();
-            if (failed.Count > 0)
-            {
-                // 登録できなかったものは、起動時にまとめて知らせる (SPEC.md 14 章)
-                Dispatcher.BeginInvoke(() => MessageBox.Show(this,
-                    Loc.L("次のショートカットは他のアプリが使っているため登録できませんでした:\n")
-                        + string.Join("\n", failed.Select(e => $"{e.KeyText}  {Loc.L(e.Description)}")),
-                    "NoGreenBack", MessageBoxButton.OK, MessageBoxImage.Information));
-            }
+            // 登録できなかったものは、起動時にまとめて知らせる (SPEC.md 14 章)
+            Dispatcher.BeginInvoke(() => ReportUnavailableShortcuts(changed: false));
         };
         Closed += (_, _) => hotKeys?.Dispose();
+
+        // ショートカットの修飾キーを替えたら、登録し直して、登録できなかったものを知らせる
+        model.Settings.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName != nameof(Settings.HotKeyModifiers) || hotKeys == null) return;
+            hotKeys.Register(model.Settings.HotKeyModifiers);
+            if (shortcutPopup is { IsOpen: true }) shortcutPopup.Child = BuildShortcutList();
+            ReportUnavailableShortcuts(changed: true);
+        };
 
         // Ctrl+/ でショートカットの一覧
         PreviewKeyDown += (_, e) =>
@@ -72,6 +74,17 @@ public partial class MainWindow : Window
     }
 
     void HelpButton_Click(object sender, RoutedEventArgs e) => ToggleShortcutList();
+
+    /// 登録できなかったショートカットを知らせる (起動したとき・修飾キーを替えたとき)
+    void ReportUnavailableShortcuts(bool changed)
+    {
+        var failed = hotKeys?.Entries.Where(e => e.Unavailable).ToList() ?? [];
+        if (failed.Count == 0) return;
+        string text = Loc.L("次のショートカットは他のアプリが使っているため登録できませんでした:\n")
+            + string.Join("\n", failed.Select(e => $"{e.KeyText}  {Loc.L(e.Description)}"));
+        if (!changed) text += "\n\n" + Loc.L("ショートカットの一覧 (Ctrl+/) の「組み合わせ」で、ほかの組み合わせに替えられます。");
+        MessageBox.Show(this, text, "NoGreenBack", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
 
     /// ショートカットの一覧を吹き出しで出す
     void ToggleShortcutList()
@@ -115,6 +128,24 @@ public partial class MainWindow : Window
         }
 
         AddHeader(Loc.L("どこからでも使えるショートカット"));
+
+        // 修飾キーの組み合わせ (ほかのアプリとぶつかるときに替える)
+        {
+            int row = grid.RowDefinitions.Count;
+            grid.RowDefinitions.Add(new RowDefinition());
+            var label = new TextBlock { Text = Loc.L("組み合わせ"), Margin = new Thickness(0, 2, 16, 6), VerticalAlignment = VerticalAlignment.Center };
+            var combo = new ComboBox
+            {
+                ItemsSource = HotKeys.ModifierChoices.Select(c => c.Text + Loc.L("＋キー")).ToList(),
+                SelectedIndex = model.Settings.HotKeyModifiers,
+                HorizontalAlignment = HorizontalAlignment.Left, MinWidth = 180, Margin = new Thickness(0, 2, 0, 6),
+                ToolTip = Loc.L("ほかのアプリが同じ組み合わせを使っていて効かないときに替えます。Stream Deck などに設定した組み合わせも替えてください"),
+            };
+            combo.SelectionChanged += (_, _) => { if (combo.SelectedIndex >= 0) model.Settings.HotKeyModifiers = combo.SelectedIndex; };
+            Grid.SetRow(label, row); Grid.SetRow(combo, row); Grid.SetColumn(combo, 1);
+            grid.Children.Add(label); grid.Children.Add(combo);
+        }
+
         foreach (var e in hotKeys?.Entries ?? [])
             AddRow(e.KeyText, Loc.L(e.Description) + (e.Unavailable ? Loc.L("（他のアプリが使用中のため使えません）") : ""), gray: e.Unavailable);
 
