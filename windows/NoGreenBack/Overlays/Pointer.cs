@@ -14,30 +14,23 @@ public static class PointerRenderer
     /// 棒の長さ (画面の高さに対する割合)
     const double LengthRatio = 0.45;
 
-    /// 棒の傾き (度。縦から、正なら根元が右)。棒はいつも矢印の右側に出して、左上を指す形にする。
-    /// 左の方を指すほど少し寝かせる。画面の端で棒がはみ出すときは、右側のまま収まる向きに回す
+    /// 棒の傾き (度。縦から、正なら根元が右)。棒はいつも矢印の右下 (0〜90 度) に出して、左上を指す形にする。
+    /// 左の方を指すほど少し寝かせる。画面の下の辺や右の辺にかかるときだけ、収まる向きに回す
     public static double Angle(Point tip, Rect area)
     {
         double f = Math.Clamp((tip.X - area.Left) / Math.Max(area.Width, 1), 0, 1);
         double preferred = 40 - 15 * f;   // 左端で 40 度、右端で 25 度
         var inner = area;
         inner.Inflate(-area.Height * 0.01, -area.Height * 0.01);
-        // 根元を右側 (0〜120 度) に保ったまま、近い向きから探す。
-        // 右下の隅のように、どの向きでも収まらないときも、左側には回さない。
-        // はみ出しがいちばん小さい向きにして、棒の一部は画面の外に出す (指す先は変わらない)
-        double best = preferred, bestOver = double.PositiveInfinity;
-        for (int step = 0; step <= 90; step++)
-            foreach (int sign in step == 0 ? new[] { 1 } : new[] { 1, -1 })
-            {
-                double deg = preferred + sign * step * 2;
-                if (deg < 0 || deg > 120) continue;
-                var b = Base(tip, deg, area);
-                double over = Math.Max(Math.Max(inner.Left - b.X, b.X - inner.Right), 0)
-                            + Math.Max(Math.Max(inner.Top - b.Y, b.Y - inner.Bottom), 0);
-                if (over == 0) return deg;
-                if (over < bestOver) { bestOver = over; best = deg; }
-            }
-        return best;
+        double length = area.Height * LengthRatio;
+        // 根元が下の辺にかからないための、いちばん小さい傾き (寝かせるほど根元が上がる。90 度で横向き)
+        double lo = Math.Acos(Math.Clamp((inner.Bottom - tip.Y) / length, 0, 1)) * 180 / Math.PI;
+        // 根元が右の辺にかからないための、いちばん大きい傾き
+        double hi = Math.Asin(Math.Clamp((inner.Right - tip.X) / length, 0, 1)) * 180 / Math.PI;
+        // 収まる向きがあれば、その中で好みの傾きにいちばん近いもの。
+        // 右下の隅のように収まる向きがないときは、上や左には回さず、棒の一部をそのまま画面の外に出す
+        // (隅に入るときも出るときも、傾きはなめらかにつながる)
+        return lo <= hi ? Math.Clamp(preferred, lo, hi) : Math.Clamp(preferred, hi, lo);
     }
 
     /// 傾き angle (度) のときの棒の根元 (手で持つ端)
