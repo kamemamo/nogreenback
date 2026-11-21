@@ -38,7 +38,7 @@ enum PointerRenderer {
         return CGPoint(x: tip.x + sin(r) * length, y: tip.y - cos(r) * length)
     }
 
-    /// 棒を描く (同じ太さの棒と、先の赤い矢印だけのシンプルな形)。size は画面 (映像) の高さ
+    /// 棒を描く (白い縁の付いた黒い細い棒と、先の白い矢印 (黒い縁))。size は画面 (映像) の高さ
     static func draw(in ctx: CGContext, from start: CGPoint, to point: CGPoint, size: CGFloat) {
         let dx = point.x - start.x, dy = point.y - start.y
         let length = hypot(dx, dy)
@@ -46,27 +46,32 @@ enum PointerRenderer {
         let ux = dx / length, uy = dy / length
         let nx = -uy, ny = ux
         // 先は矢印 (先端がちょうどマウスの位置)。棒は矢印の付け根まで
-        let headLength = size * 0.042, headHalf = size * 0.017
+        let headLength = size * 0.055, headHalf = size * 0.022
         let hb = CGPoint(x: point.x - ux * headLength, y: point.y - uy * headLength)
+        let end = CGPoint(x: hb.x + ux * headLength * 0.2, y: hb.y + uy * headLength * 0.2)
 
         ctx.saveGState()
-        // 軽い影 (明るい画面でも暗い画面でも見えるように)
-        ctx.setShadow(offset: .zero, blur: size * 0.005, color: CGColor(gray: 0, alpha: 0.45))
-        ctx.beginTransparencyLayer(auxiliaryInfo: nil)
         ctx.setLineCap(.round)
-        ctx.setLineWidth(size * 0.01)
-        ctx.setStrokeColor(CGColor(red: 0.5, green: 0.33, blue: 0.2, alpha: 1))
-        ctx.move(to: start)
-        ctx.addLine(to: CGPoint(x: hb.x + ux * headLength * 0.2, y: hb.y + uy * headLength * 0.2))
-        ctx.strokePath()
+        // 棒: 半透明の白い縁の上に黒い棒 (明るい画面では黒い棒が、暗い画面では白い縁が見える)
+        for (width, color) in [(size * 0.0225, CGColor(gray: 1, alpha: 0.6)),
+                               (size * 0.0125, CGColor(gray: 0.16, alpha: 1))] {
+            ctx.setLineWidth(width)
+            ctx.setStrokeColor(color)
+            ctx.move(to: start)
+            ctx.addLine(to: end)
+            ctx.strokePath()
+        }
+        // 矢印: 白く塗って黒い縁を付ける (明るい画面でも暗い画面でも形がわかる)
         ctx.beginPath()
         ctx.addLines(between: [point,
                                CGPoint(x: hb.x + nx * headHalf, y: hb.y + ny * headHalf),
                                CGPoint(x: hb.x - nx * headHalf, y: hb.y - ny * headHalf)])
         ctx.closePath()
-        ctx.setFillColor(CGColor(red: 0.9, green: 0.15, blue: 0.12, alpha: 1))
-        ctx.fillPath()
-        ctx.endTransparencyLayer()
+        ctx.setFillColor(CGColor(gray: 1, alpha: 1))
+        ctx.setStrokeColor(CGColor(gray: 0.1, alpha: 1))
+        ctx.setLineWidth(max(1, size * 0.003))
+        ctx.setLineJoin(.round)
+        ctx.drawPath(using: .fillStroke)
         ctx.restoreGState()
     }
 
