@@ -76,6 +76,9 @@ public sealed partial class SurfaceWindow : IDisposable
         if (activate) SetForegroundWindow(Hwnd);
     }
 
+    /// 隠す
+    public void Hide() => ShowWindow(Hwnd, 0 /* SW_HIDE */);
+
     /// 位置と大きさを変え、最前面に置き直す
     public void Place(int x, int y, int width, int height) =>
         SetWindowPos(Hwnd, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE);
