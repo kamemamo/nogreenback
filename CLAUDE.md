@@ -46,7 +46,7 @@ Mac 版と Windows 版の両方で、Claude はこの約束に従って作業し
 ## リリース
 
 - **Mac 版**: `build.sh` の `VERSION` を上げてコミット・プッシュし、`./build.sh --zip` で作った zip を、タグ `vX.Y.Z`、題名「NoGreenBack X.Y.Z」でリリースします。GitHub の「最新」は Mac 版にします。
-- **Windows 版**: `windows/NoGreenBack/NoGreenBack.csproj` の `Version` を上げ、`make-release.ps1` で作った zip を、タグ `windows-vX.Y.Z`、題名「NoGreenBack for Windows X.Y.Z」でリリースします。版は Mac 版とそろえます。2.3.14 から正式なリリースにしました（プレリリースにはしない）。GitHub の「最新」は Mac 版のままにするので、「最新」にはしません。
+- **Windows 版**: `windows/NoGreenBack/NoGreenBack.csproj` の `Version` を上げ、`make-release.ps1` で作った zip を、タグ `windows-vX.Y.Z`、題名「NoGreenBack for Windows X.Y.Z」でリリースします。版は Mac 版とそろえず、Windows 版だけで上げます（2.3.14 までは Mac 版とそろえていました。2026-11-21 に決め直し）。2.3.14 から正式なリリースにしました（プレリリースにはしない）。GitHub の「最新」は Mac 版のままにするので、「最新」にはしません。
 - リリースノートは日本語を先に書き、`---` で区切ってから英語を書きます。インストールの手順も毎回載せます。
 
 ## 気をつけること
