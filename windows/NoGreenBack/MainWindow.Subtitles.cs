@@ -6,6 +6,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Threading;
 
@@ -18,18 +19,20 @@ public partial class MainWindow
     void TermsButton_Click(object sender, RoutedEventArgs e)
     {
         if (termsPopup is { IsOpen: true }) { termsPopup.IsOpen = false; return; }
-        termsPopup = new Popup
+        // 吹き出しを先に作ってから中身を作る (中身は、閉じたときの処理を吹き出しに付けるため)
+        var popup = new Popup
         {
             PlacementTarget = TermsButton,
             Placement = PlacementMode.Bottom,
             StaysOpen = false,
             AllowsTransparency = true,
-            Child = BuildTermsPanel(),
         };
-        termsPopup.IsOpen = true;
+        termsPopup = popup;
+        popup.Child = BuildTermsPanel(popup);
+        popup.IsOpen = true;
     }
 
-    UIElement BuildTermsPanel()
+    UIElement BuildTermsPanel(Popup popup)
     {
         var s = model.Settings;
         var stack = new StackPanel { Margin = new Thickness(16, 14, 16, 14), Width = 420 };
@@ -76,7 +79,7 @@ public partial class MainWindow
         void Apply() { saveTimer.Stop(); s.SubtitleTerms = terms.Text; UpdateCount(); }
         saveTimer.Tick += (_, _) => Apply();
         terms.TextChanged += (_, _) => { saveTimer.Stop(); saveTimer.Start(); };
-        termsPopup!.Closed += (_, _) => { if (saveTimer.IsEnabled) Apply(); };
+        popup.Closed += (_, _) => { if (saveTimer.IsEnabled) Apply(); };
 
         var load = new Button { Content = Loc.L("読み込む…"), Padding = new Thickness(10, 2, 10, 2), Margin = new Thickness(8, 0, 0, 0), ToolTip = Loc.L("字幕の置き換えのファイルを選びます (今の内容と入れ替わります)") };
         var save = new Button { Content = Loc.L("保存…"), Padding = new Thickness(10, 2, 10, 2), Margin = new Thickness(8, 0, 0, 0), ToolTip = Loc.L("字幕の置き換えをファイルに保存します") };
@@ -109,7 +112,7 @@ public partial class MainWindow
             TextWrapping = TextWrapping.Wrap, FontSize = 11, Foreground = Brushes.Gray, Margin = new Thickness(0, 8, 0, 0),
         });
 
-        return new Border
+        var root = new Border
         {
             Background = Brushes.White,
             BorderBrush = new SolidColorBrush(Color.FromRgb(0xC8, 0xC8, 0xCE)),
@@ -117,6 +120,11 @@ public partial class MainWindow
             CornerRadius = new CornerRadius(8),
             Child = stack,
         };
+        // 吹き出しの中身は、開いたボタン (辞書のアイコン) の書体 (アイコン用の Segoe Fluent Icons) を引き継いで、
+        // 文字がすべて四角になる。ふつうの書体と大きさをはっきり決める
+        TextElement.SetFontFamily(root, SystemFonts.MessageFontFamily);
+        TextElement.SetFontSize(root, SystemFonts.MessageFontSize);
+        return root;
     }
 
     /// ファイルの選択画面を開いている間は、吹き出しが閉じないようにする
