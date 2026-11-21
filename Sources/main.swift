@@ -2470,12 +2470,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
             RunLoop.main.add(t, forMode: .common)
             pointerTimer = t
             CursorHider.hide()
+            watchCursorReshown()
             updatePointer()
         } else {
             CursorHider.show()
             pointerWindow.orderOut(nil)
             processor.pointer = nil
             updateRecordedWindows()
+        }
+    }
+
+    /// 指し棒で隠したカーソルを、macOS がまた出したときに隠し直す見張り (最初に指し棒をオンにしたときに 1 回だけ付ける)。
+    /// 操作ウィンドウでポップアップのメニューを選んだり、ボタンを押したりすると、カーソルが出てくるため
+    var cursorWatchers: [Any] = []
+    func watchCursorReshown() {
+        guard cursorWatchers.isEmpty else { return }
+        // 出されたあとに隠し直すよう、知らせの処理が終わってから隠す
+        let rehide = { DispatchQueue.main.async { CursorHider.rehide() } }
+        cursorWatchers.append(NotificationCenter.default.addObserver(
+            forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main) { _ in rehide() })
+        if let m = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseUp, .rightMouseUp], handler: { e in rehide(); return e }) {
+            cursorWatchers.append(m)
         }
     }
 

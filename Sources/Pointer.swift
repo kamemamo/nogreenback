@@ -171,6 +171,15 @@ enum CursorHider {
         CGDisplayHideCursor(CGMainDisplayID())
     }
 
+    /// 隠している間に macOS がカーソルを出したとき (操作ウィンドウでポップアップのメニューを選んだときなど) に、
+    /// 隠し直す。カーソルが出ているかは調べられない (調べる関数は今の macOS で使えない) ので、
+    /// いったん出してから隠す。出ていなかったときも、隠したままで回数も変わらない
+    static func rehide() {
+        guard hidden else { return }
+        CGDisplayShowCursor(CGMainDisplayID())
+        CGDisplayHideCursor(CGMainDisplayID())
+    }
+
     static func show() {
         guard hidden else { return }
         hidden = false
