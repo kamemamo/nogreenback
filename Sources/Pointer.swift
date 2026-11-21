@@ -8,27 +8,23 @@ enum PointerRenderer {
     /// 棒の長さ (画面の高さに対する割合)
     static let lengthRatio: CGFloat = 0.45
 
-    /// 棒の傾き (度。縦から、正なら根元が右)。棒はいつも矢印の右下に出して、左上を指す形にする。
-    /// 左の方を指すほど少し寝かせる。画面の端で棒がはみ出すときは、収まる向きに回す
+    /// 棒の傾き (度。縦から、正なら根元が右)。棒はいつも矢印の右下 (0〜90 度) に出して、左上を指す形にする。
+    /// 左の方を指すほど少し寝かせる。画面の下の辺や右の辺にかかるときだけ、収まる向きに回す
     static func angle(tip: CGPoint, in area: CGRect) -> CGFloat {
         // 先の横の位置 (左端 0、右端 1)
         let f = min(max((tip.x - area.minX) / max(area.width, 1), 0), 1)
         // 左端で 40 度、右端で 25 度 (どちらも根元が右)
         let preferred = 40 - 15 * f
         let inner = area.insetBy(dx: area.height * 0.01, dy: area.height * 0.01)
-        // まず根元を同じ側 (右を指していれば右) に保ったまま、近い向きから探す。
-        // それで収まらないときだけ、反対側も使う
-        let side: CGFloat = preferred >= 0 ? 1 : -1
-        for sameSideOnly in [true, false] {
-            for step in 0...90 {
-                for sign in step == 0 ? [CGFloat(1)] : [CGFloat(1), -1] {
-                    let deg = preferred + sign * CGFloat(step) * 2
-                    if sameSideOnly && (deg * side < 0 || abs(deg) > 120) { continue }
-                    if inner.contains(base(tip: tip, angle: deg, in: area)) { return deg }
-                }
-            }
-        }
-        return preferred
+        let length = area.height * lengthRatio
+        // 根元が下の辺にかからないための、いちばん小さい傾き (寝かせるほど根元が上がる。90 度で横向き)
+        let lo = acos(min(max((tip.y - inner.minY) / length, 0), 1)) * 180 / .pi
+        // 根元が右の辺にかからないための、いちばん大きい傾き
+        let hi = asin(min(max((inner.maxX - tip.x) / length, 0), 1)) * 180 / .pi
+        // 収まる向きがあれば、その中で好みの傾きにいちばん近いもの。
+        // 右下の隅のように収まる向きがないときは、上や左には回さず、棒の一部をそのまま画面の外に出す
+        // (隅に入るときも出るときも、傾きはなめらかにつながる)
+        return lo <= hi ? min(max(preferred, lo), hi) : min(max(preferred, hi), lo)
     }
 
     /// 傾き angle (度) のときの棒の根元 (手で持つ端)。座標は左下原点

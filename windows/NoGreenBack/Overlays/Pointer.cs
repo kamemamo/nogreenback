@@ -5,7 +5,6 @@
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Media;
-using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 
 namespace NoGreenBack.Overlays;
@@ -15,25 +14,23 @@ public static class PointerRenderer
     /// 棒の長さ (画面の高さに対する割合)
     const double LengthRatio = 0.45;
 
-    /// 棒の傾き (度。縦から、正なら根元が右)。棒はいつも矢印の右下に出して、左上を指す形にする。
-    /// 左の方を指すほど少し寝かせる。画面の端で棒がはみ出すときは、収まる向きに回す
+    /// 棒の傾き (度。縦から、正なら根元が右)。棒はいつも矢印の右下 (0〜90 度) に出して、左上を指す形にする。
+    /// 左の方を指すほど少し寝かせる。画面の下の辺や右の辺にかかるときだけ、収まる向きに回す
     public static double Angle(Point tip, Rect area)
     {
         double f = Math.Clamp((tip.X - area.Left) / Math.Max(area.Width, 1), 0, 1);
         double preferred = 40 - 15 * f;   // 左端で 40 度、右端で 25 度
         var inner = area;
         inner.Inflate(-area.Height * 0.01, -area.Height * 0.01);
-        // まず根元を同じ側に保ったまま、近い向きから探す。それで収まらないときだけ、反対側も使う
-        double side = preferred >= 0 ? 1 : -1;
-        foreach (bool sameSideOnly in new[] { true, false })
-            for (int step = 0; step <= 90; step++)
-                foreach (int sign in step == 0 ? new[] { 1 } : new[] { 1, -1 })
-                {
-                    double deg = preferred + sign * step * 2;
-                    if (sameSideOnly && (deg * side < 0 || Math.Abs(deg) > 120)) continue;
-                    if (inner.Contains(Base(tip, deg, area))) return deg;
-                }
-        return preferred;
+        double length = area.Height * LengthRatio;
+        // 根元が下の辺にかからないための、いちばん小さい傾き (寝かせるほど根元が上がる。90 度で横向き)
+        double lo = Math.Acos(Math.Clamp((inner.Bottom - tip.Y) / length, 0, 1)) * 180 / Math.PI;
+        // 根元が右の辺にかからないための、いちばん大きい傾き
+        double hi = Math.Asin(Math.Clamp((inner.Right - tip.X) / length, 0, 1)) * 180 / Math.PI;
+        // 収まる向きがあれば、その中で好みの傾きにいちばん近いもの。
+        // 右下の隅のように収まる向きがないときは、上や左には回さず、棒の一部をそのまま画面の外に出す
+        // (隅に入るときも出るときも、傾きはなめらかにつながる)
+        return lo <= hi ? Math.Clamp(preferred, lo, hi) : Math.Clamp(preferred, hi, lo);
     }
 
     /// 傾き angle (度) のときの棒の根元 (手で持つ端)
@@ -43,31 +40,40 @@ public static class PointerRenderer
         return new Point(tip.X + Math.Sin(r) * length, tip.Y + Math.Cos(r) * length);
     }
 
-    static readonly Brush StickBrush = Frozen(new SolidColorBrush(Color.FromRgb(128, 84, 51)));
-    static readonly Brush HeadBrush = Frozen(new SolidColorBrush(Color.FromRgb(230, 38, 31)));
+    // 棒は半透明の白い縁の上に黒い棒、矢印は白く塗って黒い縁 (Mac 版と同じ色)
+    static readonly Brush StickBrush = Frozen(new SolidColorBrush(Color.FromRgb(41, 41, 41)));
+    static readonly Brush StickEdgeBrush = Frozen(new SolidColorBrush(Color.FromArgb(153, 255, 255, 255)));
+    static readonly Brush HeadBrush = Frozen(new SolidColorBrush(Colors.White));
+    static readonly Brush HeadEdgeBrush = Frozen(new SolidColorBrush(Color.FromRgb(26, 26, 26)));
     static T Frozen<T>(T f) where T : Freezable { f.Freeze(); return f; }
 
-    /// 棒を描く (同じ太さの棒と、先の赤い矢印だけのシンプルな形)。size は画面 (映像) の高さ
+    /// 棒を描く (白い縁の付いた黒い細い棒と、先の白い矢印 (黒い縁))。size は画面 (映像) の高さ。
+    /// 明るい画面では黒い棒と矢印の縁が、暗い画面では白い縁と白い矢印が見えるので、影は付けない
     public static void Draw(DrawingContext dc, Point start, Point tip, double size)
     {
         double dx = tip.X - start.X, dy = tip.Y - start.Y, length = Math.Sqrt(dx * dx + dy * dy);
         if (length <= 1) return;
         double ux = dx / length, uy = dy / length, nx = -uy, ny = ux;
         // 先は矢印 (先端がちょうどマウスの位置)。棒は矢印の付け根まで
-        double headLength = size * 0.042, headHalf = size * 0.017;
+        double headLength = size * 0.055, headHalf = size * 0.022;
         var hb = new Point(tip.X - ux * headLength, tip.Y - uy * headLength);
-        var pen = new Pen(StickBrush, size * 0.01) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
-        dc.DrawLine(pen, start, new Point(hb.X + ux * headLength * 0.2, hb.Y + uy * headLength * 0.2));
+        var end = new Point(hb.X + ux * headLength * 0.2, hb.Y + uy * headLength * 0.2);
+        foreach (var (brush, width) in new[] { (StickEdgeBrush, size * 0.0225), (StickBrush, size * 0.0125) })
+        {
+            var pen = new Pen(brush, width) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+            dc.DrawLine(pen, start, end);
+        }
         var head = new StreamGeometry();
         using (var g = head.Open())
         {
             g.BeginFigure(tip, true, true);
             g.PolyLineTo([new Point(hb.X + nx * headHalf, hb.Y + ny * headHalf), new Point(hb.X - nx * headHalf, hb.Y - ny * headHalf)], true, true);
         }
-        dc.DrawGeometry(HeadBrush, null, head);
+        var edge = new Pen(HeadEdgeBrush, Math.Max(1, size * 0.003)) { LineJoin = PenLineJoin.Round };
+        dc.DrawGeometry(HeadBrush, edge, head);
     }
 
-    /// 傾き angle (度)、画面 (映像) の高さ size のときの、棒のまわり (影の分の余白つき) だけの画像と、
+    /// 傾き angle (度)、画面 (映像) の高さ size のときの、棒のまわり (縁の分の余白つき) だけの画像と、
     /// 画像の中での矢印の先の位置。絵は先の位置によらず傾きと大きさだけで決まるので、同じ傾きの間は使い回せる
     /// (画像が画面からはみ出しても、ウィンドウや映像の外が切れるだけ)
     public static Rendered? Render(double angle, double size)
@@ -79,11 +85,7 @@ public static class PointerRenderer
         if (w < 1 || h < 1) return null;
         var tip = new Point(-left, -top);
 
-        var visual = new DrawingVisual
-        {
-            // 軽い影 (明るい画面でも暗い画面でも見えるように)
-            Effect = new DropShadowEffect { ShadowDepth = 0, BlurRadius = Math.Max(1, size * 0.01), Color = Colors.Black, Opacity = 0.45 },
-        };
+        var visual = new DrawingVisual();
         using (var dc = visual.RenderOpen()) Draw(dc, new Point(tip.X + dx, tip.Y + dy), tip, size);
         var bmp = new RenderTargetBitmap(w, h, 96, 96, PixelFormats.Pbgra32);
         bmp.Render(visual);
