@@ -3180,6 +3180,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         termsPopover = p
         termsView.string = subtitleTerms
         updateTermsCount()
+        // 件数の文が変わると中身の大きさも変わるので、開くたびに吹き出しの大きさを合わせ直す
+        if let vc = p.contentViewController {
+            vc.view.layoutSubtreeIfNeeded()
+            vc.preferredContentSize = vc.view.fittingSize
+        }
         window.makeKeyAndOrderFront(nil)
         p.show(relativeTo: termsButton.bounds, of: termsButton, preferredEdge: .maxY)
         window.makeFirstResponder(nil)
@@ -3230,13 +3235,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         termsBox.hasVerticalScroller = true
         termsBox.autohidesScrollers = true
         termsBox.borderType = .bezelBorder
-        termsBox.widthAnchor.constraint(equalToConstant: 420).isActive = true
+        termsBox.widthAnchor.constraint(equalToConstant: 460).isActive = true
         termsBox.heightAnchor.constraint(equalToConstant: 240).isActive = true
         let hint = NSTextField(wrappingLabelWithString: L("よく間違える言葉を「間違い → 正しい」と 1 行ずつ書くと、字幕と字幕ファイルで置き換えます (例: ジオメトリー濃度 → ジオメトリーノード、ブレンダー → Blender)。→ は -> や = でも書けます。書いた内容は自動で残ります。ほかの Mac や別の話題用に、ファイルに保存・読み込みもできます"))
         hint.font = .systemFont(ofSize: 11)
         hint.textColor = .secondaryLabelColor
-        hint.preferredMaxLayoutWidth = 420
+        hint.preferredMaxLayoutWidth = 460
         termsCountLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        // 件数の文が長いときは、ボタンを押し出さずに文の方を詰める (吹き出しの右端でボタンが切れないように)
+        termsCountLabel.lineBreakMode = .byTruncatingTail
+        termsCountLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let load = NSButton(title: L("読み込む…"), target: self, action: #selector(loadTerms))
         let save = NSButton(title: L("保存…"), target: self, action: #selector(saveTerms))
         let buttons = NSStackView(views: [termsCountLabel, NSView(), load, save])
@@ -3247,6 +3255,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         stack.spacing = 8
         stack.edgeInsets = NSEdgeInsets(top: 14, left: 16, bottom: 14, right: 16)
         buttons.widthAnchor.constraint(equalTo: termsBox.widthAnchor).isActive = true
+        // 左寄せの縦の並びは、右の余白 (edgeInsets.right) を大きさに入れないので、右端をはっきり決める
+        // (決めないと「保存…」のボタンが吹き出しの右端にくっつき、説明の文も切れる)
+        termsBox.trailingAnchor.constraint(equalTo: stack.trailingAnchor, constant: -16).isActive = true
         let vc = NSViewController()
         vc.view = stack
         vc.preferredContentSize = stack.fittingSize
