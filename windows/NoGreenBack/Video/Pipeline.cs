@@ -208,7 +208,7 @@ public sealed class Pipeline : Observable, IDisposable
 
         // 重ねる画像: 新しく入ったものを GPU に上げ、このキャンバスの大きさに合うものだけを重ねる
         var layers = new List<(GpuImage, Vector4)>(LayerCount);
-        (GpuImage, Vector4)? spoutSubtitle = null;
+        (GpuImage, Vector4)? spoutSubtitle = null, pointerLayer = null;
         lock (layerGate)
         {
             for (int k = 0; k < LayerCount; k++)
@@ -225,7 +225,11 @@ public sealed class Pipeline : Observable, IDisposable
                         ? (layerImages[k], new Vector4(sc.X, sc.Y, sc.Width, sc.Height)) : null;
                 }
                 else if (currentLayers[k] is { } cur && cur.CanvasWidth == canvasW && cur.CanvasHeight == canvasH)
-                    layers.Add((layerImages[k], new Vector4(cur.X, cur.Y, cur.Width, cur.Height)));
+                {
+                    var item = (layerImages[k], new Vector4(cur.X, cur.Y, cur.Width, cur.Height));
+                    if (k == (int)LayerKind.Pointer) pointerLayer = item;   // 指し棒は全画面出力に出したあとで重ねる
+                    else layers.Add(item);
+                }
             }
         }
 
@@ -233,6 +237,12 @@ public sealed class Pipeline : Observable, IDisposable
         var background = Background.Pull();
         gpu.Compose(canvasW, canvasH, personRect, s.Mirror, s.PersonOn && hasCamera, gain, Volatile.Read(ref boardOpacity), layers,
             background);
+
+        // 全画面出力には指し棒を入れない (全画面出力の上には、画面の描き変えに合わせて動く指し棒のウィンドウを重ねる。
+        // 映像の中の指し棒はカメラのコマごとにしか動かず、かくかくするため)。プレビューと Spout には、このあと重ねる
+        // (字幕より手前になるが、指し棒が字幕に重なるのはまれなので、2 つ目の合成はしない)
+        fullScreen?.Present(checkerboard: false);
+        if (pointerLayer is { } pl) gpu.DrawImages(gpu.CanvasRtv!, canvasW, canvasH, [pl]);
 
         // Spout: 背景があれば合成と同じものを送る。なければ人物を元の大きさのまま (隅に縮めずに) 送り、受け取る側で自由に置けるようにする
         // (板・キーボード・手書き・指し棒は入れない。字幕は作ったら下の中央に入れる)
@@ -259,7 +269,6 @@ public sealed class Pipeline : Observable, IDisposable
         Interlocked.Increment(ref composedCount);
 
         if (preview != null && previewVisible) preview.Present(checkerboard: true);
-        fullScreen?.Present(checkerboard: false);
         PresentOverlay(s.PersonOn && hasCamera);
     }
 

@@ -121,6 +121,8 @@ public sealed class Gpu : IDisposable
     ID3D11Texture2D? canvasTex;
     ID3D11RenderTargetView? canvasRtv;
     public ID3D11ShaderResourceView? CanvasSrv { get; private set; }
+    /// キャンバスに描き足すための描き込み先 (指し棒をあとから重ねる)
+    public ID3D11RenderTargetView? CanvasRtv => canvasRtv;
     public int CanvasWidth { get; private set; }
     public int CanvasHeight { get; private set; }
 

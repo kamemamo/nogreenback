@@ -24,8 +24,7 @@ public sealed partial class OverlayController : IDisposable
     readonly OverlayWindow boardWindow = new() { Title = "NoGreenBack Board" };
     readonly OverlayWindow keyboardWindow = new() { Title = "NoGreenBack Keyboard" };
     readonly Image keyboardImage = new() { Stretch = Stretch.Fill };
-    readonly OverlayWindow pointerWindow = new() { Title = "NoGreenBack Pointer" };
-    readonly Image pointerImage = new() { Stretch = Stretch.Fill };
+    readonly PointerSurface pointerSurface = new();   // デスクトップの指し棒 (画面の描き変えに合わせて動く)
     bool disposed;
 
     // 描くキー: 押し始め・押し始めの線の数・前に素早く押して離した時刻 (2 回で全部消す)
@@ -57,7 +56,7 @@ public sealed partial class OverlayController : IDisposable
     {
         this.model = model;
         keyboardWindow.Content = keyboardImage;
-        pointerWindow.Content = pointerImage;
+        pointerSurface.SetDisplays(model.Displays.All);
 
         annotations.Changed += w => { if (w.Display.Name == model.Outputs.FullDisplay?.Name) annotationDirty = true; };
         annotations.ClearRequested += model.ClearDrawing;
@@ -65,7 +64,7 @@ public sealed partial class OverlayController : IDisposable
 
         model.Settings.PropertyChanged += OnChanged;
         model.State.PropertyChanged += OnChanged;
-        model.Displays.Changed += _ => { Cover(); UpdateAll(); };
+        model.Displays.Changed += _ => { pointerSurface.SetDisplays(model.Displays.All); Cover(); UpdateAll(); };
         model.Outputs.Changed += UpdateAll;
         model.Video.CanvasChanged += _ => { annotationDirty = true; UpdateKeyboard(); };
         model.Video.Background.Changed += UpdateAll;
@@ -138,11 +137,11 @@ public sealed partial class OverlayController : IDisposable
 
         // 指し棒
         bool pointer = st.PointerOn;
+        pointerSurface.SetEnabled(pointer);
         if (pointer) CursorHider.Hide();
         else
         {
             CursorHider.Show();
-            if (pointerWindow.IsVisible) pointerWindow.Hide();
             model.Video.SetLayer(LayerKind.Pointer, null);
             lastPointer = null; pointerAngle = null; pointerDisplay = null;
         }
@@ -254,28 +253,26 @@ public sealed partial class OverlayController : IDisposable
             : new LayerImage(l.Pixels, l.Rect.Width, l.Rect.Height, l.Rect.X, l.Rect.Y, canvas.Width, canvas.Height));
     }
 
-    /// マウスのある画面に指し棒を描く。全画面出力の画面なら、合成した映像の中に描く。
+    /// 全画面出力の画面にマウスがあるとき、プレビューと Spout のために、合成した映像の中にも指し棒を描く
+    /// (デスクトップの指し棒は PointerSurface が描く。全画面出力の上にも、そちらを重ねる)。
     /// 先はマウスにぴったり付いていき、棒の傾きは少し遅れてなめらかに変わる
     void UpdatePointer()
     {
         if (!GetCursorPos(out var m)) return;
         var d = model.Displays.All.FirstOrDefault(x => m.X >= x.Left && m.X < x.Left + x.Width && m.Y >= x.Top && m.Y < x.Top + x.Height);
-        if (d == null) return;
+        var canvas = model.Video.Canvas;
+        if (d == null || canvas == null || model.Outputs.FullDisplay?.Name != d.Name)
+        {
+            if (pointerDisplay != null) { model.Video.SetLayer(LayerKind.Pointer, null); pointerDisplay = null; lastPointer = null; pointerAngle = null; }
+            return;
+        }
         if (d != pointerDisplay) { pointerDisplay = d; pointerAngle = null; }
 
-        // 全画面出力の画面なら、合成した映像の座標で考える (映像は画面に収まるように拡大して真ん中に出しているので、その逆をたどる)
-        var tip = new Point(m.X - d.Left, m.Y - d.Top);
-        var area = new Rect(0, 0, d.Width, d.Height);
-        bool onOutput = model.Outputs.FullDisplay?.Name == d.Name;
-        var canvas = model.Video.Canvas;
-        if (onOutput)
-        {
-            if (canvas == null) return;
-            double sc = Math.Min((double)d.Width / canvas.Width, (double)d.Height / canvas.Height);
-            double tx = (d.Width - canvas.Width * sc) / 2, ty = (d.Height - canvas.Height * sc) / 2;
-            tip = new Point((tip.X - tx) / sc, (tip.Y - ty) / sc);
-            area = new Rect(0, 0, canvas.Width, canvas.Height);
-        }
+        // 合成した映像の座標で考える (映像は画面に収まるように拡大して真ん中に出しているので、その逆をたどる)
+        double sc = Math.Min((double)d.Width / canvas.Width, (double)d.Height / canvas.Height);
+        double tx = (d.Width - canvas.Width * sc) / 2, ty = (d.Height - canvas.Height * sc) / 2;
+        var tip = new Point((m.X - d.Left - tx) / sc, (m.Y - d.Top - ty) / sc);
+        var area = new Rect(0, 0, canvas.Width, canvas.Height);
         double target = PointerRenderer.Angle(tip, area);
         double current = pointerAngle ?? target;
         double angle = Math.Abs(target - current) < 0.1 ? target : current + (target - current) * 0.18;
@@ -285,31 +282,17 @@ public sealed partial class OverlayController : IDisposable
         pointerAngle = angle;
 
         // 絵は傾き (0.5 度きざみ) と大きさだけで決まるので、同じ間は描き直さずに位置だけ動かす
-        // (影付きの絵を 60 回/秒描き直すと、UI のスレッドが重くなるため)
         double quantized = Math.Round(angle * 2) / 2;
         string key = $"{quantized} {area.Height}";
         if (key != pointerKey)
         {
             pointerKey = key;
             pointerRendered = PointerRenderer.Render(quantized, area.Height);
-            pointerImage.Source = pointerRendered?.Bitmap;
         }
         var pr = pointerRendered;
         int x = (int)Math.Round(tip.X) - (pr?.TipX ?? 0), y = (int)Math.Round(tip.Y) - (pr?.TipY ?? 0);
-        if (onOutput)
-        {
-            if (pointerWindow.IsVisible) pointerWindow.Hide();
-            model.Video.SetLayer(LayerKind.Pointer, pr == null ? null
-                : new LayerImage(pr.Pixels, pr.Bitmap.PixelWidth, pr.Bitmap.PixelHeight, x, y, canvas!.Width, canvas.Height));
-        }
-        else
-        {
-            model.Video.SetLayer(LayerKind.Pointer, null);
-            if (pr == null) { pointerWindow.Hide(); return; }
-            // ウィンドウは棒のまわりだけの大きさにして動かす (画面全体を 60 回/秒描き直さないように)
-            pointerWindow.Place(d.Left + x, d.Top + y, pr.Bitmap.PixelWidth, pr.Bitmap.PixelHeight);
-            pointerWindow.ShowNoActivate();
-        }
+        model.Video.SetLayer(LayerKind.Pointer, pr == null ? null
+            : new LayerImage(pr.Pixels, pr.Bitmap.PixelWidth, pr.Bitmap.PixelHeight, x, y, canvas.Width, canvas.Height));
     }
 
     string pointerKey = "";
@@ -321,7 +304,7 @@ public sealed partial class OverlayController : IDisposable
         // 字幕はキーボードと同じ高さ (ワイプの 1 つ上)
         var order = new List<IntPtr> { boardWindow.Hwnd, model.Outputs.WipeHwnd, keyboardWindow.Hwnd, model.Subtitles?.WindowHwnd ?? IntPtr.Zero, model.Outputs.FullHwnd };
         order.AddRange(annotations.Windows.Select(w => w.Hwnd));
-        order.Add(pointerWindow.Hwnd);
+        order.Add(pointerSurface.Hwnd);
         order.Add(model.Recording?.PanelHwnd ?? IntPtr.Zero);   // 録画停止のパネルはいちばん手前
         OverlayWindow.Arrange(order);
         UpdateCaptureExclusion();
@@ -347,7 +330,7 @@ public sealed partial class OverlayController : IDisposable
         void Mark(IntPtr h, bool exclude) { if (h != IntPtr.Zero) want[h] = (want.TryGetValue(h, out var e) && e) || exclude; }
 
         var subtitle = model.Subtitles?.WindowHwnd ?? IntPtr.Zero;
-        foreach (var h in new[] { main, panel, subtitle, model.Outputs.WipeHwnd, model.Outputs.FullHwnd, keyboardWindow.Hwnd, pointerWindow.Hwnd })
+        foreach (var h in new[] { main, panel, subtitle, model.Outputs.WipeHwnd, model.Outputs.FullHwnd, keyboardWindow.Hwnd, pointerSurface.Hwnd })
             Mark(h, bg != null && IsOn(h, bg));
         Mark(main, recording);
         Mark(panel, recording);
@@ -394,7 +377,7 @@ public sealed partial class OverlayController : IDisposable
         annotations.Close();
         boardWindow.Close();
         keyboardWindow.Close();
-        pointerWindow.Close();
+        pointerSurface.Dispose();
     }
 
     [StructLayout(LayoutKind.Sequential)]
