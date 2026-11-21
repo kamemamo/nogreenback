@@ -86,6 +86,7 @@ public sealed partial class PointerSurface : IDisposable
     IDCompositionVisual? visual;
     PointerRenderer.Rendered? shown;      // いまのせている絵
     int swapW, swapH;
+    bool attached;                        // スワップチェーンをビジュアルにつけているか (隠すときに外す)
 
     void Run()
     {
@@ -113,9 +114,11 @@ public sealed partial class PointerSurface : IDisposable
                         Log.Write($"指し棒: 画面の合成 {frames / sec:F0} 回/秒、動かした {moves / sec:F0} 回/秒、動かす間隔の最大 {maxGap:F1} ms");
                         frames = 0; moves = 0; maxGap = 0; lastMove = 0;
                     }
-                    if (shown != null) { visual!.SetContent(null!); dcomp!.Commit(); shown = null; }
+                    if (attached) { visual!.SetContent(null!); dcomp!.Commit(); attached = false; }
+                    shown = null;
                     angle = null; lastDisplay = null; lastX = lastY = int.MinValue;
-                    ui.BeginInvoke(window.Hide);
+                    // 隠す前に、すぐまたオンにされていないかを確かめる (オンにした後で隠してしまわないため)
+                    ui.BeginInvoke(() => { bool onAgain; lock (gate) onAgain = enabled; if (!onAgain) window.Hide(); });
                     wake.WaitOne();
                     statStart = Stopwatch.GetTimestamp();
                     lastTicks = statStart;
@@ -208,6 +211,7 @@ public sealed partial class PointerSurface : IDisposable
         if (swapChain == null || swapW != sw || swapH != sh)
         {
             visual!.SetContent(null!);
+            attached = false;
             swapChain?.Dispose();
             using var dxgi = device!.QueryInterface<IDXGIDevice>();
             using var adapter = dxgi.GetAdapter();
@@ -219,8 +223,9 @@ public sealed partial class PointerSurface : IDisposable
                 BufferUsage = Usage.RenderTargetOutput, SampleDescription = new SampleDescription(1, 0),
                 SwapEffect = SwapEffect.FlipDiscard, Scaling = Scaling.Stretch, AlphaMode = AlphaMode.Premultiplied,
             }, null);
-            visual.SetContent(swapChain).CheckError();
         }
+        // 指し棒を一度隠すと外れているので、出し直すたびにつけ直す
+        if (!attached) { visual!.SetContent(swapChain).CheckError(); attached = true; }
         // 絵より大きいスワップチェーンの余りは透明にする
         using var back = swapChain.GetBuffer<ID3D11Texture2D>(0);
         using (var rtv = device!.CreateRenderTargetView(back)) context!.ClearRenderTargetView(rtv, new Vortice.Mathematics.Color4(0, 0, 0, 0));
