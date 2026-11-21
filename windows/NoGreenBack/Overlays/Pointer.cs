@@ -14,25 +14,30 @@ public static class PointerRenderer
     /// 棒の長さ (画面の高さに対する割合)
     const double LengthRatio = 0.45;
 
-    /// 棒の傾き (度。縦から、正なら根元が右)。棒はいつも矢印の右下に出して、左上を指す形にする。
-    /// 左の方を指すほど少し寝かせる。画面の端で棒がはみ出すときは、収まる向きに回す
+    /// 棒の傾き (度。縦から、正なら根元が右)。棒はいつも矢印の右側に出して、左上を指す形にする。
+    /// 左の方を指すほど少し寝かせる。画面の端で棒がはみ出すときは、右側のまま収まる向きに回す
     public static double Angle(Point tip, Rect area)
     {
         double f = Math.Clamp((tip.X - area.Left) / Math.Max(area.Width, 1), 0, 1);
         double preferred = 40 - 15 * f;   // 左端で 40 度、右端で 25 度
         var inner = area;
         inner.Inflate(-area.Height * 0.01, -area.Height * 0.01);
-        // まず根元を同じ側に保ったまま、近い向きから探す。それで収まらないときだけ、反対側も使う
-        double side = preferred >= 0 ? 1 : -1;
-        foreach (bool sameSideOnly in new[] { true, false })
-            for (int step = 0; step <= 90; step++)
-                foreach (int sign in step == 0 ? new[] { 1 } : new[] { 1, -1 })
-                {
-                    double deg = preferred + sign * step * 2;
-                    if (sameSideOnly && (deg * side < 0 || Math.Abs(deg) > 120)) continue;
-                    if (inner.Contains(Base(tip, deg, area))) return deg;
-                }
-        return preferred;
+        // 根元を右側 (0〜120 度) に保ったまま、近い向きから探す。
+        // 右下の隅のように、どの向きでも収まらないときも、左側には回さない。
+        // はみ出しがいちばん小さい向きにして、棒の一部は画面の外に出す (指す先は変わらない)
+        double best = preferred, bestOver = double.PositiveInfinity;
+        for (int step = 0; step <= 90; step++)
+            foreach (int sign in step == 0 ? new[] { 1 } : new[] { 1, -1 })
+            {
+                double deg = preferred + sign * step * 2;
+                if (deg < 0 || deg > 120) continue;
+                var b = Base(tip, deg, area);
+                double over = Math.Max(Math.Max(inner.Left - b.X, b.X - inner.Right), 0)
+                            + Math.Max(Math.Max(inner.Top - b.Y, b.Y - inner.Bottom), 0);
+                if (over == 0) return deg;
+                if (over < bestOver) { bestOver = over; best = deg; }
+            }
+        return best;
     }
 
     /// 傾き angle (度) のときの棒の根元 (手で持つ端)

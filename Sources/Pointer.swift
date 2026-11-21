@@ -8,27 +8,29 @@ enum PointerRenderer {
     /// 棒の長さ (画面の高さに対する割合)
     static let lengthRatio: CGFloat = 0.45
 
-    /// 棒の傾き (度。縦から、正なら根元が右)。棒はいつも矢印の右下に出して、左上を指す形にする。
-    /// 左の方を指すほど少し寝かせる。画面の端で棒がはみ出すときは、収まる向きに回す
+    /// 棒の傾き (度。縦から、正なら根元が右)。棒はいつも矢印の右側に出して、左上を指す形にする。
+    /// 左の方を指すほど少し寝かせる。画面の端で棒がはみ出すときは、右側のまま収まる向きに回す
     static func angle(tip: CGPoint, in area: CGRect) -> CGFloat {
         // 先の横の位置 (左端 0、右端 1)
         let f = min(max((tip.x - area.minX) / max(area.width, 1), 0), 1)
         // 左端で 40 度、右端で 25 度 (どちらも根元が右)
         let preferred = 40 - 15 * f
         let inner = area.insetBy(dx: area.height * 0.01, dy: area.height * 0.01)
-        // まず根元を同じ側 (右を指していれば右) に保ったまま、近い向きから探す。
-        // それで収まらないときだけ、反対側も使う
-        let side: CGFloat = preferred >= 0 ? 1 : -1
-        for sameSideOnly in [true, false] {
-            for step in 0...90 {
-                for sign in step == 0 ? [CGFloat(1)] : [CGFloat(1), -1] {
-                    let deg = preferred + sign * CGFloat(step) * 2
-                    if sameSideOnly && (deg * side < 0 || abs(deg) > 120) { continue }
-                    if inner.contains(base(tip: tip, angle: deg, in: area)) { return deg }
-                }
+        // 根元を右側 (0〜120 度) に保ったまま、近い向きから探す。
+        // 右下の隅のように、どの向きでも収まらないときも、左側には回さない。
+        // はみ出しがいちばん小さい向きにして、棒の一部は画面の外に出す (指す先は変わらない)
+        var best = preferred, bestOver = CGFloat.infinity
+        for step in 0...90 {
+            for sign in step == 0 ? [CGFloat(1)] : [CGFloat(1), -1] {
+                let deg = preferred + sign * CGFloat(step) * 2
+                guard deg >= 0, deg <= 120 else { continue }
+                let b = base(tip: tip, angle: deg, in: area)
+                let over = max(inner.minX - b.x, b.x - inner.maxX, 0) + max(inner.minY - b.y, b.y - inner.maxY, 0)
+                if over == 0 { return deg }
+                if over < bestOver { bestOver = over; best = deg }
             }
         }
-        return preferred
+        return best
     }
 
     /// 傾き angle (度) のときの棒の根元 (手で持つ端)。座標は左下原点

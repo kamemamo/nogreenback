@@ -98,7 +98,7 @@ When explaining shortcuts (for Blender, for example), show a keyboard and circle
 
 Turn on **Pointer** (⌃⌥⌘ L) to point at the mouse position with a pointer stick and a white arrow. The mouse cursor is hidden while it's on, and the arrow tip takes its place.
 
-- The stick has a fixed length and always comes from the lower right of the arrow. It tilts a little more toward the left of the screen, turns so it stays on screen near the edges, and follows smoothly.
+- The stick has a fixed length and always comes from the lower right of the arrow. It tilts a little more toward the left of the screen and follows smoothly. Near the edges it turns to stay on screen while staying on the right of the arrow; in the lower-right corner, part of the stick goes off screen (the tip still points where you want).
 - It's drawn directly on screen (and recorded). Over the full-screen output it's drawn inside the composited video, so you can point at another computer's screen too.
 
 ### Screen recording
