@@ -5,7 +5,6 @@
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Media;
-using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 
 namespace NoGreenBack.Overlays;
@@ -43,31 +42,40 @@ public static class PointerRenderer
         return new Point(tip.X + Math.Sin(r) * length, tip.Y + Math.Cos(r) * length);
     }
 
-    static readonly Brush StickBrush = Frozen(new SolidColorBrush(Color.FromRgb(128, 84, 51)));
-    static readonly Brush HeadBrush = Frozen(new SolidColorBrush(Color.FromRgb(230, 38, 31)));
+    // 棒は半透明の白い縁の上に黒い棒、矢印は白く塗って黒い縁 (Mac 版と同じ色)
+    static readonly Brush StickBrush = Frozen(new SolidColorBrush(Color.FromRgb(41, 41, 41)));
+    static readonly Brush StickEdgeBrush = Frozen(new SolidColorBrush(Color.FromArgb(153, 255, 255, 255)));
+    static readonly Brush HeadBrush = Frozen(new SolidColorBrush(Colors.White));
+    static readonly Brush HeadEdgeBrush = Frozen(new SolidColorBrush(Color.FromRgb(26, 26, 26)));
     static T Frozen<T>(T f) where T : Freezable { f.Freeze(); return f; }
 
-    /// 棒を描く (同じ太さの棒と、先の赤い矢印だけのシンプルな形)。size は画面 (映像) の高さ
+    /// 棒を描く (白い縁の付いた黒い細い棒と、先の白い矢印 (黒い縁))。size は画面 (映像) の高さ。
+    /// 明るい画面では黒い棒と矢印の縁が、暗い画面では白い縁と白い矢印が見えるので、影は付けない
     public static void Draw(DrawingContext dc, Point start, Point tip, double size)
     {
         double dx = tip.X - start.X, dy = tip.Y - start.Y, length = Math.Sqrt(dx * dx + dy * dy);
         if (length <= 1) return;
         double ux = dx / length, uy = dy / length, nx = -uy, ny = ux;
         // 先は矢印 (先端がちょうどマウスの位置)。棒は矢印の付け根まで
-        double headLength = size * 0.042, headHalf = size * 0.017;
+        double headLength = size * 0.055, headHalf = size * 0.022;
         var hb = new Point(tip.X - ux * headLength, tip.Y - uy * headLength);
-        var pen = new Pen(StickBrush, size * 0.01) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
-        dc.DrawLine(pen, start, new Point(hb.X + ux * headLength * 0.2, hb.Y + uy * headLength * 0.2));
+        var end = new Point(hb.X + ux * headLength * 0.2, hb.Y + uy * headLength * 0.2);
+        foreach (var (brush, width) in new[] { (StickEdgeBrush, size * 0.0225), (StickBrush, size * 0.0125) })
+        {
+            var pen = new Pen(brush, width) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+            dc.DrawLine(pen, start, end);
+        }
         var head = new StreamGeometry();
         using (var g = head.Open())
         {
             g.BeginFigure(tip, true, true);
             g.PolyLineTo([new Point(hb.X + nx * headHalf, hb.Y + ny * headHalf), new Point(hb.X - nx * headHalf, hb.Y - ny * headHalf)], true, true);
         }
-        dc.DrawGeometry(HeadBrush, null, head);
+        var edge = new Pen(HeadEdgeBrush, Math.Max(1, size * 0.003)) { LineJoin = PenLineJoin.Round };
+        dc.DrawGeometry(HeadBrush, edge, head);
     }
 
-    /// 傾き angle (度)、画面 (映像) の高さ size のときの、棒のまわり (影の分の余白つき) だけの画像と、
+    /// 傾き angle (度)、画面 (映像) の高さ size のときの、棒のまわり (縁の分の余白つき) だけの画像と、
     /// 画像の中での矢印の先の位置。絵は先の位置によらず傾きと大きさだけで決まるので、同じ傾きの間は使い回せる
     /// (画像が画面からはみ出しても、ウィンドウや映像の外が切れるだけ)
     public static Rendered? Render(double angle, double size)
@@ -79,11 +87,7 @@ public static class PointerRenderer
         if (w < 1 || h < 1) return null;
         var tip = new Point(-left, -top);
 
-        var visual = new DrawingVisual
-        {
-            // 軽い影 (明るい画面でも暗い画面でも見えるように)
-            Effect = new DropShadowEffect { ShadowDepth = 0, BlurRadius = Math.Max(1, size * 0.01), Color = Colors.Black, Opacity = 0.45 },
-        };
+        var visual = new DrawingVisual();
         using (var dc = visual.RenderOpen()) Draw(dc, new Point(tip.X + dx, tip.Y + dy), tip, size);
         var bmp = new RenderTargetBitmap(w, h, 96, 96, PixelFormats.Pbgra32);
         bmp.Render(visual);
