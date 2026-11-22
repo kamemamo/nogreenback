@@ -11,7 +11,7 @@
     <RootNamespace>NoGreenBack</RootNamespace>
     <AssemblyName>NoGreenBack</AssemblyName>
     <Product>NoGreenBack</Product>
-    <Version>2.3.14</Version>
+    <Version>2.3.16</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- アイコンは Mac 版と同じ Icons/AppIcon.png から windows/Tools/MakeIcon で作る (作り方は README) -->
     <ApplicationIcon>Resources\AppIcon.ico</ApplicationIcon>
