@@ -45,6 +45,8 @@ public static class PointerRenderer
     static readonly Brush StickEdgeBrush = Frozen(new SolidColorBrush(Color.FromArgb(153, 255, 255, 255)));
     static readonly Brush HeadBrush = Frozen(new SolidColorBrush(Colors.White));
     static readonly Brush HeadEdgeBrush = Frozen(new SolidColorBrush(Color.FromRgb(26, 26, 26)));
+    /// 棒の不透明度 (矢印は透かさない)
+    public const double StickOpacity = 0.6;
     static T Frozen<T>(T f) where T : Freezable { f.Freeze(); return f; }
 
     /// 棒を描く (白い縁の付いた黒い細い棒と、先の白い矢印 (黒い縁))。size は画面 (映像) の高さ。
@@ -58,11 +60,15 @@ public static class PointerRenderer
         double headLength = size * 0.055, headHalf = size * 0.022;
         var hb = new Point(tip.X - ux * headLength, tip.Y - uy * headLength);
         var end = new Point(hb.X + ux * headLength * 0.2, hb.Y + uy * headLength * 0.2);
+        // 棒だけ 60% の不透明度にする (下の文字が読めるように)。矢印は透かさない。
+        // 棒の白い縁と黒い棒をまとめて透かすので、重なる所も濃くならない (Mac 版と同じ)
+        dc.PushOpacity(StickOpacity);
         foreach (var (brush, width) in new[] { (StickEdgeBrush, size * 0.0225), (StickBrush, size * 0.0125) })
         {
             var pen = new Pen(brush, width) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
             dc.DrawLine(pen, start, end);
         }
+        dc.Pop();
         var head = new StreamGeometry();
         using (var g = head.Open())
         {
