@@ -106,12 +106,14 @@ public static class PointerRenderer
 }
 
 /// 指し棒を出している間、マウスカーソルを隠す (矢印の先がカーソルの代わり)。
-/// ほかのアプリが前面でも隠れるよう、システムのカーソルを一時的に透明なものに差し替え、戻すときは設定から読み直す。
+/// ほかのアプリが前面でも隠れるよう、拡大鏡の仕組み (Magnification の MagShowSystemCursor) でシステムのカーソルを隠す。
+/// それが使えないときは、システムのカーソルを一時的に透明なものに差し替え、戻すときは設定から読み直す。
+/// (差し替えだけでは、画面に出ているカーソルの絵が読み直されず、矢印が見えたままになる PC があったので、拡大鏡の仕組みを先に使う)
 /// 落ちたときにも戻るよう、App の終了・クラッシュの処理からも Show を呼ぶ。
 /// 強制終了などでそれも動かなかったときのために、隠している間は目印のファイルを置き、次に起動したときに目印があれば戻す
 public static partial class CursorHider
 {
-    static bool hidden;
+    static bool hidden, magnifier, swapped;
 
     static string MarkerPath => System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NoGreenBack", "cursor-hidden");
@@ -122,11 +124,12 @@ public static partial class CursorHider
         try
         {
             if (!System.IO.File.Exists(MarkerPath)) return;
+            if (MagInitialize()) { MagShowSystemCursor(true); MagUninitialize(); }
             SystemParametersInfoW(0x57 /* SPI_SETCURSORS */, 0, IntPtr.Zero, 0);
             System.IO.File.Delete(MarkerPath);
             Log.Write("前の起動で隠したままだったカーソルを戻しました");
         }
-        catch (Exception e) when (e is System.IO.IOException or UnauthorizedAccessException) { }
+        catch (Exception e) when (e is System.IO.IOException or UnauthorizedAccessException or DllNotFoundException or EntryPointNotFoundException) { }
     }
 
     // 差し替えるカーソル (矢印・I ビーム・待ち・十字・上矢印・大きさ変更 4 種・移動・禁止・手・バックグラウンド作業中・ヘルプ)
@@ -142,25 +145,116 @@ public static partial class CursorHider
             System.IO.File.WriteAllText(MarkerPath, DateTime.Now.ToString("O"));
         }
         catch (Exception e) when (e is System.IO.IOException or UnauthorizedAccessException) { }
-        var and =Enumerable.Repeat((byte)0xFF, 32 * 32 / 8).ToArray();   // AND が 1・XOR が 0 で、画面がそのまま見える (透明)
-        var xor = new byte[32 * 32 / 8];
+
+        // 1. 拡大鏡の仕組みで隠す
+        try
+        {
+            if (MagInitialize())
+            {
+                if (MagShowSystemCursor(false)) { magnifier = true; return; }
+                MagUninitialize();
+            }
+        }
+        catch (Exception e) when (e is DllNotFoundException or EntryPointNotFoundException) { }
+
+        // 2. 使えなければ、透明なカーソルに差し替える (32 ビットのカラーカーソル。白黒のカーソルは、画面によって透明にならないため)
+        int failed = 0;
         foreach (var id in Ids)
         {
-            var c = CreateCursor(IntPtr.Zero, 0, 0, 32, 32, and, xor);
-            if (c != IntPtr.Zero) SetSystemCursor(c, id);   // c はシステムのものになる (自分で消さない)
+            var c = CreateTransparentCursor();
+            if (c == IntPtr.Zero || !SetSystemCursor(c, id)) failed++;   // c はシステムのものになる (自分で消さない)
         }
+        swapped = true;
+        // 画面に出ているカーソルの絵を読み直させるため、カーソルを 1 画素動かして戻す
+        if (GetCursorPos(out var p)) { SetCursorPos(p.X + 1, p.Y); SetCursorPos(p.X, p.Y); }
+        Log.Write("指し棒: 拡大鏡の仕組みが使えないので、カーソルを透明なものに差し替えました" + (failed > 0 ? $" ({failed} 個は差し替えられません)" : ""));
     }
 
     public static void Show()
     {
         if (!hidden) return;
         hidden = false;
-        SystemParametersInfoW(0x57 /* SPI_SETCURSORS */, 0, IntPtr.Zero, 0);
+        if (magnifier) { MagShowSystemCursor(true); MagUninitialize(); magnifier = false; }
+        if (swapped) { SystemParametersInfoW(0x57 /* SPI_SETCURSORS */, 0, IntPtr.Zero, 0); swapped = false; }
         try { System.IO.File.Delete(MarkerPath); } catch (Exception e) when (e is System.IO.IOException or UnauthorizedAccessException) { }
     }
 
+    /// 色もαも 0 の、32 ビットのカラーカーソル (システムのカーソルの大きさ)
+    static IntPtr CreateTransparentCursor()
+    {
+        int w = Math.Max(32, GetSystemMetrics(13 /* SM_CXCURSOR */)), h = Math.Max(32, GetSystemMetrics(14 /* SM_CYCURSOR */));
+        var bmi = new BITMAPINFOHEADER { biSize = Marshal.SizeOf<BITMAPINFOHEADER>(), biWidth = w, biHeight = -h, biPlanes = 1, biBitCount = 32 };
+        IntPtr color = CreateDIBSection(IntPtr.Zero, ref bmi, 0 /* DIB_RGB_COLORS */, out _, IntPtr.Zero, 0);   // 中身は 0 (透明)
+        var maskBits = Enumerable.Repeat((byte)0xFF, (w + 15) / 16 * 2 * h).ToArray();                          // 白黒の部分も「画面のまま」
+        IntPtr mask = CreateBitmap(w, h, 1, 1, maskBits);
+        try
+        {
+            if (color == IntPtr.Zero || mask == IntPtr.Zero) return IntPtr.Zero;
+            var info = new ICONINFO { fIcon = 0, xHotspot = 0, yHotspot = 0, hbmMask = mask, hbmColor = color };
+            return CreateIconIndirect(ref info);
+        }
+        finally
+        {
+            if (color != IntPtr.Zero) DeleteObject(color);   // カーソルは中身を写して持つので、元の絵は消してよい
+            if (mask != IntPtr.Zero) DeleteObject(mask);
+        }
+    }
+
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct BITMAPINFOHEADER
+    {
+        public int biSize, biWidth, biHeight;
+        public short biPlanes, biBitCount;
+        public int biCompression, biSizeImage, biXPelsPerMeter, biYPelsPerMeter, biClrUsed, biClrImportant;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct ICONINFO
+    {
+        public int fIcon;   // 0 はカーソル
+        public int xHotspot, yHotspot;
+        public IntPtr hbmMask, hbmColor;
+    }
+
+    [LibraryImport("gdi32.dll")]
+    private static partial IntPtr CreateDIBSection(IntPtr hdc, ref BITMAPINFOHEADER bmi, uint usage, out IntPtr bits, IntPtr section, uint offset);
+
+    [LibraryImport("gdi32.dll")]
+    private static partial IntPtr CreateBitmap(int width, int height, uint planes, uint bitCount, byte[] bits);
+
+    [LibraryImport("gdi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool DeleteObject(IntPtr obj);
+
     [LibraryImport("user32.dll")]
-    private static partial IntPtr CreateCursor(IntPtr instance, int hotX, int hotY, int width, int height, byte[] andPlane, byte[] xorPlane);
+    private static partial IntPtr CreateIconIndirect(ref ICONINFO info);
+
+    [LibraryImport("user32.dll")]
+    private static partial int GetSystemMetrics(int index);
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct POINT { public int X, Y; }
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetCursorPos(out POINT point);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SetCursorPos(int x, int y);
+
+    [LibraryImport("Magnification.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool MagInitialize();
+
+    [LibraryImport("Magnification.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool MagUninitialize();
+
+    [LibraryImport("Magnification.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool MagShowSystemCursor([MarshalAs(UnmanagedType.Bool)] bool showCursor);
 
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
