@@ -1,5 +1,5 @@
 // 画面録画の操作 (SPEC.md 9 章)
-// - 「録画する画面」を録画し、もう一度押すと止めて、「ビデオ」フォルダに NoGreenBack yyyy-MM-dd HH.mm.ss.mp4 で保存し、エクスプローラーで選んで見せる
+// - 「録画する画面」を録画し、もう一度押すと止めて、「ビデオ」フォルダに NGB yyyy-MM-dd HH.mm.ss.mp4 で保存し、エクスプローラーで選んで見せる
 // - 押した時点ではボタンの色を変えず、録画が実際に始まった・止まったときに変える。処理中はボタンを押せなくする。止めたあとは「保存中…」と出す
 // - 録画停止ボタン: 録画している画面の右上 (右から 16・上から 12) に「■ 録画停止」と経過時間の小さなパネルを出す。録画に映さず、ドラッグで動かせる
 // - 操作ウィンドウと同じ画面を録画するときは、録画を始めたら操作ウィンドウを最小化し、止めたら元に戻して前面にする
@@ -93,7 +93,7 @@ public sealed partial class RecordingController : Observable, IDisposable
         {
             string folder = Environment.GetFolderPath(Environment.SpecialFolder.MyVideos);
             Directory.CreateDirectory(folder);
-            string name = $"NoGreenBack {DateTime.Now:yyyy-MM-dd HH.mm.ss}";
+            string name = $"NGB {DateTime.Now:yyyy-MM-dd HH.mm.ss}";
             finalPath = Path.Combine(folder, name + ".mp4");
             string temp = Path.Combine(folder, name + ".recording.mp4");
             var options = new RecordOptions(s.RecMbps, s.RecLongSide, s.RecFPS, s.RecHEVC, s.RecAudioKbps);
