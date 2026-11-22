@@ -14,6 +14,7 @@ Mac 版と Windows 版の両方で、Claude はこの約束に従って作業し
 | `Sources/`、`build.sh` | Mac 版（Swift、Apple Silicon、macOS 12 以降） |
 | `windows/` | Windows 版（C# .NET 10 ＋ WPF、Windows 11）。説明は `windows/README.md` |
 | `docs/SPEC.md` | 両方の版が守る仕様書。Windows 版で決めたことは 17 章 |
+| `docs/DEVELOPMENT.md` | ブランチの使い分け、Mac と Windows での作業の流れ、リリースの手順 |
 | `README.md` / `README.en.md` | 使い方の説明（日本語と英語） |
 | `Resources/en.lproj/Localizable.strings` | 画面の文字の英語訳。Windows 版もここを読む（Windows だけの文は `windows/NoGreenBack/Resources/en.strings`） |
 
