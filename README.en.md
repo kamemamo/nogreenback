@@ -103,7 +103,7 @@ Turn on **Pointer** (⌃⌥⌘ L) to point at the mouse position with a pointer 
 
 ### Screen recording
 
-**● Record** records the "Screen to record" and saves `NoGreenBack date time.mp4` to your Movies folder.
+**● Record** records the "Screen to record" and saves `NGB date time.mp4` to your Movies folder.
 
 - The overlaid person and drawings are recorded; the NoGreenBack control window isn't.
 - A small "■ Stop Recording" button with the elapsed time appears at the top right of the screen being recorded, so you can tell which screen is recorded (it isn't recorded itself). Stop with it or ⌃⌥⌘ R.

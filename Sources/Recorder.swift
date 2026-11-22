@@ -103,7 +103,7 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
         let movies = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0]
         let stamp = DateFormatter()
         stamp.dateFormat = "yyyy-MM-dd HH.mm.ss"
-        let url = movies.appendingPathComponent("NoGreenBack \(stamp.string(from: Date())).mov")
+        let url = movies.appendingPathComponent("NGB \(stamp.string(from: Date())).mov")
         let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
         // 2 秒ごとにフラグメントを書き出す (途中で止まっても最大 2 秒分しか失わない)
         writer.movieFragmentInterval = CMTime(seconds: 2, preferredTimescale: 600)
