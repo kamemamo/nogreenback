@@ -7,6 +7,8 @@ import CoreImage
 enum PointerRenderer {
     /// 棒の長さ (画面の高さに対する割合)
     static let lengthRatio: CGFloat = 0.45
+    /// 指し棒全体の不透明度
+    static let opacity: CGFloat = 0.8
 
     /// 棒の傾き (度。縦から、正なら根元が右)。棒はいつも矢印の右下 (0〜90 度) に出して、左上を指す形にする。
     /// 左の方を指すほど少し寝かせる。画面の下の辺や右の辺にかかるときだけ、収まる向きに回す
@@ -47,6 +49,10 @@ enum PointerRenderer {
         let end = CGPoint(x: hb.x + ux * headLength * 0.2, y: hb.y + uy * headLength * 0.2)
 
         ctx.saveGState()
+        // 棒と矢印をまとめて 80% の不透明度にする (後ろが少し透けて見える)。
+        // まとめて透かすので、白い縁と黒い棒、矢印と縁が重なる所も濃くならない
+        ctx.setAlpha(opacity)
+        ctx.beginTransparencyLayer(auxiliaryInfo: nil)
         ctx.setLineCap(.round)
         // 棒: 半透明の白い縁の上に黒い棒 (明るい画面では黒い棒が、暗い画面では白い縁が見える)
         for (width, color) in [(size * 0.0225, CGColor(gray: 1, alpha: 0.6)),
@@ -68,6 +74,7 @@ enum PointerRenderer {
         ctx.setLineWidth(max(1, size * 0.003))
         ctx.setLineJoin(.round)
         ctx.drawPath(using: .fillStroke)
+        ctx.endTransparencyLayer()
         ctx.restoreGState()
     }
 
