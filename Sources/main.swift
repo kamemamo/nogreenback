@@ -1420,6 +1420,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
             DispatchQueue.main.async { self?.fpsLabel.stringValue = String(format: "%.1f fps", fps) }
         }
         buildUI()
+        BackgroundSource.allowIOSScreens()
         AVCaptureDevice.requestAccess(for: .video) { ok in
             DispatchQueue.main.async {
                 if ok { self.refreshCameras(); self.startSession(); self.watchCamera(); self.refreshBackgrounds() }
@@ -1629,7 +1630,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
                 guard let self else { return }
                 self.refreshCameras()
                 if name == AVCaptureDevice.wasConnectedNotification,
-                   let d = note.object as? AVCaptureDevice, d.hasMediaType(.video) {
+                   let d = note.object as? AVCaptureDevice, d.hasMediaType(.video) || d.hasMediaType(.muxed) {
                     if d.uniqueID == self.currentDevice?.uniqueID {
                         self.reopenCamera(d)
                     } else if self.currentDevice == nil,
@@ -2242,7 +2243,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
             ?? NSScreen.screens.dropFirst().first ?? NSScreen.screens[0]
     }
 
-    /// 背景の選択肢: なし / この Mac の画面 / カメラやキャプチャー機器。
+    /// 背景の選択肢: なし / この Mac の画面 / カメラやキャプチャー機器 / USB でつないだ iPhone・iPad の画面。
     /// 項目の representedObject に、保存用の ID (画面は "screen:名前"、機器は uniqueID) を入れる
     func refreshBackgrounds() {
         var types: [AVCaptureDevice.DeviceType] = [.builtInWideAngleCamera]
@@ -2250,6 +2251,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         else { types.append(.externalUnknown) }
         bgDevices = AVCaptureDevice.DiscoverySession(deviceTypes: types, mediaType: .video,
                                                      position: .unspecified).devices
+        // iPhone・iPad の画面は、映像と音が一緒になった機器 (muxed) として出てくる
+        let iosTypes: [AVCaptureDevice.DeviceType]
+        if #available(macOS 14.0, *) { iosTypes = [.external] } else { iosTypes = [.externalUnknown] }
+        bgDevices += AVCaptureDevice.DiscoverySession(deviceTypes: iosTypes, mediaType: .muxed,
+                                                      position: .unspecified).devices
+            .filter { d in !bgDevices.contains { $0.uniqueID == d.uniqueID } }
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: L("なし（透明）"), action: nil, keyEquivalent: ""))
         if #available(macOS 12.3, *) {
@@ -2262,7 +2269,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         }
         if !bgDevices.isEmpty { menu.addItem(.separator()) }
         for d in bgDevices {
-            let item = NSMenuItem(title: d.localizedName, action: nil, keyEquivalent: "")
+            // iPhone の画面は、同じ iPhone のカメラ (連係カメラ) と見分けられるように名前を付ける
+            let title = BackgroundSource.isIOSScreen(d) ? L("iPhone・iPad の画面: %@", d.localizedName) : d.localizedName
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
             item.representedObject = d.uniqueID
             menu.addItem(item)
         }

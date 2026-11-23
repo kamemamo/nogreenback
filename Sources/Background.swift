@@ -4,6 +4,7 @@
 import AppKit
 import AVFoundation
 import CoreImage
+import CoreMediaIO
 import ScreenCaptureKit
 
 /// 背景にする映像の入力。最新の 1 フレームだけを持っておき、人物の処理のたびに使う
@@ -18,6 +19,24 @@ final class BackgroundSource: NSObject, AVCaptureVideoDataOutputSampleBufferDele
     private var screenFeed: AnyObject?   // ScreenFeed (macOS 12.3 以降)
     /// 止めたり切り替えたりするたびに増やす (遅れて届いた古いフレームや開始処理を捨てるため)
     private var generation = 0
+
+    /// USB でつないだ iPhone・iPad の画面を、取り込み機器として出してもらう (QuickTime と同じ仕組み)。
+    /// 頼んだあと少しして機器がつながった知らせが来るので、そこで背景の選択肢に加わる
+    static func allowIOSScreens() {
+        var prop = CMIOObjectPropertyAddress(
+            mSelector: CMIOObjectPropertySelector(kCMIOHardwarePropertyAllowScreenCaptureDevices),
+            mScope: CMIOObjectPropertyScope(kCMIOObjectPropertyScopeGlobal),
+            mElement: CMIOObjectPropertyElement(kCMIOObjectPropertyElementMain))
+        var allow: UInt32 = 1
+        let status = CMIOObjectSetPropertyData(CMIOObjectID(kCMIOObjectSystemObject), &prop, 0, nil,
+                                               UInt32(MemoryLayout<UInt32>.size), &allow)
+        if status != 0 { NSLog("background: can't allow iOS screen devices (\(status))") }
+    }
+
+    /// iPhone・iPad の画面か (映像と音が一緒になった機器として出てくる)
+    static func isIOSScreen(_ device: AVCaptureDevice) -> Bool {
+        device.hasMediaType(.muxed) && !device.hasMediaType(.video)
+    }
 
     /// 最新の背景フレーム (背景なしなら nil)
     var latestImage: CIImage? { lock.lock(); defer { lock.unlock() }; return _image }
@@ -35,6 +54,9 @@ final class BackgroundSource: NSObject, AVCaptureVideoDataOutputSampleBufferDele
         stop()
         guard let device else { return }
         try open(device)
+        // iPhone・iPad の画面は、画面が動かない間はコマが来ないことがあるので見張らない
+        // (外したときは、機器が外れた知らせで止まる)
+        if Self.isIOSScreen(device) { return }
         // スイッチャー (ATEM など) は映像形式を変えたときや、つないだ直後に
         // USB の機器として一度消えて出直すことがある。古いつながりのまま映像が止まるので、
         // しばらくフレームが来なければ同じ機器を探して開き直す
@@ -67,7 +89,8 @@ final class BackgroundSource: NSObject, AVCaptureVideoDataOutputSampleBufferDele
         let input = try AVCaptureDeviceInput(device: device)
         let session = AVCaptureSession()
         session.beginConfiguration()
-        session.sessionPreset = session.canSetSessionPreset(.hd1920x1080) ? .hd1920x1080 : .high
+        // iPhone・iPad の画面は縦長で大きさが機種ごとに違うので、そのままの大きさで受け取る
+        session.sessionPreset = !Self.isIOSScreen(device) && session.canSetSessionPreset(.hd1920x1080) ? .hd1920x1080 : .high
         if session.canAddInput(input) { session.addInput(input) }
         let output = AVCaptureVideoDataOutput()
         output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
@@ -135,7 +158,11 @@ final class BackgroundSource: NSObject, AVCaptureVideoDataOutputSampleBufferDele
     func captureOutput(_ output: AVCaptureOutput, didOutput sb: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard let pb = CMSampleBufferGetImageBuffer(sb) else { return }
         let image = CIImage(cvPixelBuffer: pb)
-        lock.lock(); _image = image; lastFrameTime = CFAbsoluteTimeGetCurrent(); lock.unlock()
+        lock.lock()
+        let first = lastFrameTime < startedTime
+        _image = image; lastFrameTime = CFAbsoluteTimeGetCurrent()
+        lock.unlock()
+        if first { NSLog("background: first frame \(CVPixelBufferGetWidth(pb))x\(CVPixelBufferGetHeight(pb))") }
     }
 }
 
