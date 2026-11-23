@@ -93,6 +93,7 @@ Mac 版と Windows 版は、同じ動きをすることを目標にしていま�
 
 1. `NoGreenBack.csproj` の `Version` を上げ、`Bump Windows version to X.Y.Z` でコミットして、プルリクエストで `main` に入れます。
 2. Windows の機械で zip を作り、タグ `windows-vX.Y.Z` でリリースします（「最新」にはしない）。
+3. Microsoft Store に出すときは、`windows/Tools/make-msix.ps1` で .msix を作って Partner Center に上げます（手順は `windows/README.md`。準備中）。
 
 ### リリースノート
 

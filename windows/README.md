@@ -35,6 +35,25 @@ dotnet run --project windows/Tools/MakeIcon
 powershell -ExecutionPolicy Bypass -File windows/Tools/make-release.ps1
 ```
 
+### Microsoft Store 用の MSIX（準備中）
+
+Store に出すための MSIX（`windows/dist/NoGreenBack-Windows-<版>.msix`、署名なし）は、次で作ります。中身は上の zip と同じもの（モデル・ライセンスを含む）で、`windows/Packaging/AppxManifest.xml`（設定）と `windows/Packaging/Images`（タイルの画像）を足して、Windows SDK の `makeappx` でまとめます。Windows SDK を入れておきます。
+
+```bash
+powershell -ExecutionPolicy Bypass -File windows/Tools/make-msix.ps1
+```
+
+- **この PC で試す:** 「設定 → システム → 開発者向け」で開発者モードをオンにして、`-Register` を付けて実行します。署名なしのまま入り、スタートメニューの NoGreenBack から起動できます（`windows/dist/msix` を消すと起動できなくなります）。
+- **Store に出す:** Partner Center でアプリ名を予約し、「製品の ID」に出る 3 つの値を `-Name`・`-Publisher`・`-PublisherDisplayName` で渡して作り、できた .msix を上げます。署名は Store が付けます。
+- タイルの画像は `Icons/AppIcon.png` から `MakeIcon` で .ico と一緒に作ります。
+
+MSIX で動かすと、次の点が zip 版と変わります。実機ではまだ確かめていません。
+
+- **カメラ・マイク:** 設定に書いてあるので使えます。Windows の「プライバシーとセキュリティ」に NoGreenBack が 1 つのアプリとして並び、初めて使うときに許可を聞かれます。
+- **取り込み中の黄色い枠:** 枠を消すには、設定に `graphicsCaptureWithoutBorder` を書き、使う人の同意（`GraphicsCaptureAccess.RequestAccessAsync`）を取る必要があります。コードがまだ同意を取っていないので、今の MSIX 版では枠が出ます。
+- **設定・ログ・字幕のモデル:** `%APPDATA%` と `%LOCALAPPDATA%` への書き込みは、アプリ専用の場所に振り替えられます。zip 版の設定は引き継がれず、アンインストールすると消えます。
+- **指し棒の間のカーソル隠し**（拡大鏡のしくみ）: zip 版と同じに動く見込みですが、確かめていません。
+
 ## できていること
 
 - 操作ウィンドウの骨組み（上部のボタン、プレビューの場所、サイドバー）

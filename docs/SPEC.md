@@ -563,6 +563,7 @@ Mac では `UserDefaults`（キーは下の表の名前）に保存していま�
 7. **配布: 試作は署名なしの zip、公開版は Microsoft Store（MSIX）を第一候補**
    - 試作のうちは .NET を同梱した自己完結型の zip を GitHub のリリースに置く（SmartScreen の警告は「詳細情報 → 実行」で開ける）。
    - 公開版は Store にする（Store が署名し、警告が出ず、自動で更新される）。MSIX にするとパッケージの ID が付くので、あとで Windows の AI API を使うときにも都合がよい。
+   - MSIX は `windows/Tools/make-msix.ps1` で、zip と同じ中身に `windows/Packaging/AppxManifest.xml` を足して作る。ふつうのデスクトップアプリと同じ権限（runFullTrust）で動かし、カメラ・マイク・画面の取り込みを宣言する。取り込みの黄色い枠を消すには、`graphicsCaptureWithoutBorder` の宣言と使う人の同意（`RequestAccessAsync`）が要るので、コードで同意を取るまでは宣言しない（MSIX 版では枠が出る）。（2026-11-23 に手順を追加。実機ではまだ確かめていない）
 
 ### あわせて決めておくこと
 
