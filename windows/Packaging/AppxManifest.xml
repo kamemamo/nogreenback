@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Microsoft Store 用の MSIX の設定 (SPEC.md 17 章 7)。windows\Tools\make-msix.ps1 が {{…}} を埋めて使う。
+  - {{NAME}} {{PUBLISHER}} {{PUBLISHER_DISPLAY_NAME}} は、Partner Center でアプリ名を予約したときに出る値に合わせる
+    (「製品の ID」の Package/Identity/Name、Package/Identity/Publisher、Package/Properties/PublisherDisplayName)
+  - {{VERSION}} は NoGreenBack.csproj の Version に .0 を付けたもの (Store では 4 つ目は 0 にする決まり)
+  - ふつうのデスクトップアプリと同じ権限 (runFullTrust) で動かす
+  - 取り込み中の黄色い枠を消すには graphicsCaptureWithoutBorder の宣言と、使う人の同意 (RequestAccessAsync) が要る。
+    コードがまだ同意を取っていないので、今は宣言していない (MSIX 版では枠が出る)
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap6="http://schemas.microsoft.com/appx/manifest/uap/windows10/6"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap uap6 rescap">
+
+  <Identity Name="{{NAME}}" Publisher="{{PUBLISHER}}" Version="{{VERSION}}" ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>NoGreenBack</DisplayName>
+    <PublisherDisplayName>{{PUBLISHER_DISPLAY_NAME}}</PublisherDisplayName>
+    <Logo>Images\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.22000.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="ja-JP" />
+    <Resource Language="en-US" />
+  </Resources>
+
+  <Applications>
+    <Application Id="NoGreenBack" Executable="NoGreenBack.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="NoGreenBack"
+        Description="Cut the person out of your webcam image without a green screen"
+        BackgroundColor="transparent"
+        Square150x150Logo="Images\Square150x150Logo.png"
+        Square44x44Logo="Images\Square44x44Logo.png" />
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <uap6:Capability Name="graphicsCapture" />
+    <rescap:Capability Name="runFullTrust" />
+    <DeviceCapability Name="webcam" />
+    <DeviceCapability Name="microphone" />
+  </Capabilities>
+</Package>

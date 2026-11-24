@@ -80,7 +80,7 @@ public sealed class SubtitleController : Observable, IDisposable
                 recognizer?.Configure(Language, Prompt);
                 break;
             case nameof(Settings.PersonOn) or nameof(Settings.KeyboardOn) or nameof(Settings.KeyboardSize) or nameof(Settings.KeyboardPlace)
-                or nameof(Settings.OverlayOn) or nameof(Settings.OverlayCorner) or nameof(Settings.OverlayScale) or nameof(Settings.OverlayScreen):
+                or nameof(AppState.KeyTextShown) or nameof(Settings.OverlayOn) or nameof(Settings.OverlayCorner) or nameof(Settings.OverlayScale) or nameof(Settings.OverlayScreen):
                 Render();
                 break;
         }
@@ -203,7 +203,8 @@ public sealed class SubtitleController : Observable, IDisposable
         var canvas = model.Video.Canvas;
 
         // 映像の中: 人物を出しているときは人物の反対側のすき間の真ん中、キーボードが下半分にあればその上
-        string key = $"{string.Join("|", lines)} {canvas} {s.PersonOn} {s.KeyboardOn} {s.KeyboardSize} {s.KeyboardPlace}";
+        bool keyText = model.State.KeyTextShown;
+        string key = $"{string.Join("|", lines)} {canvas} {s.PersonOn} {s.KeyboardOn} {s.KeyboardSize} {s.KeyboardPlace} {keyText}";
         if (key != renderKey)
         {
             renderKey = key;
@@ -217,7 +218,7 @@ public sealed class SubtitleController : Observable, IDisposable
                 var area = new Rect(0, 0, canvas.Width, canvas.Height);
                 (double, double)? person = s.PersonOn ? (canvas.PersonX, canvas.PersonX + canvas.PersonWidth) : null;
                 double? kbTop = null;
-                if (s.KeyboardOn && KeyboardRenderer.PixelSize(canvas.Width * s.KeyboardSize) is { } kb)
+                if (s.KeyboardOn && KeyboardRenderer.PixelSize(canvas.Width * s.KeyboardSize, keyText) is { } kb)
                 {
                     var f = KeyboardRenderer.Frame(kb, area, s.KeyboardPlace, canvas.PersonX, canvas.PersonX + canvas.PersonWidth);
                     if (f.Top + f.Height / 2 > canvas.Height / 2.0) kbTop = f.Top;
@@ -255,7 +256,7 @@ public sealed class SubtitleController : Observable, IDisposable
             if (window.IsVisible) window.Hide();
             return;
         }
-        string key = $"{string.Join("|", lines)} {d} {s.OverlayOn} {s.PersonOn} {s.OverlayCorner} {s.OverlayScale} {s.KeyboardOn} {s.KeyboardSize} {s.KeyboardPlace}";
+        string key = $"{string.Join("|", lines)} {d} {s.OverlayOn} {s.PersonOn} {s.OverlayCorner} {s.OverlayScale} {s.KeyboardOn} {s.KeyboardSize} {s.KeyboardPlace} {model.State.KeyTextShown}";
         if (key == windowKey && window.IsVisible) return;
         windowKey = key;
 
@@ -265,7 +266,7 @@ public sealed class SubtitleController : Observable, IDisposable
         // 画面に人物 (ワイプ) を出しているときは、人物の反対側に出す
         (double, double)? person = s.OverlayOn && s.PersonOn ? (pl, pl + pw) : null;
         double? kbTop = null;
-        if (s.KeyboardOn && KeyboardRenderer.PixelSize(d.Width * s.KeyboardSize) is { } kb)
+        if (s.KeyboardOn && KeyboardRenderer.PixelSize(d.Width * s.KeyboardSize, model.State.KeyTextShown) is { } kb)
         {
             var f = KeyboardRenderer.Frame(kb, area, s.KeyboardPlace, pl, pl + pw);
             if (f.Top + f.Height / 2 > d.Top + d.Height / 2.0) kbTop = f.Top;

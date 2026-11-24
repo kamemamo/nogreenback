@@ -38,6 +38,9 @@ public sealed partial class OverlayController : IDisposable
 
     // キーボードの画像 (大きさや設定が同じあいだは作り直さない)
     string keyboardCanvasKey = "", keyboardWindowKey = "";
+    // 実際に押したキー (キーボードを出している間だけ見て、絵で光らせる)
+    readonly KeyPressWatcher keyWatcher = new();
+    KeyboardRenderer.Pressed pressed = KeyboardRenderer.Pressed.None;
 
     // 指し棒
     DisplayInfo? pointerDisplay;
@@ -56,6 +59,13 @@ public sealed partial class OverlayController : IDisposable
     {
         this.model = model;
         keyboardWindow.Content = keyboardImage;
+        keyWatcher.IsJis = () => model.Settings.KeyboardLayoutIndex == 0;
+        keyWatcher.Changed += p =>
+        {
+            pressed = p;
+            model.State.KeyTextShown = p.Text != null;   // 字幕を文字の帯の上に出すため
+            UpdateKeyboard();
+        };
         pointerSurface.SetDisplays(model.Displays.All);
 
         annotations.Changed += w => { if (w.Display.Name == model.Outputs.FullDisplay?.Name) annotationDirty = true; };
@@ -157,14 +167,17 @@ public sealed partial class OverlayController : IDisposable
     {
         var s = model.Settings;
         bool jis = s.KeyboardLayoutIndex == 0;
+        if (s.KeyboardOn) keyWatcher.Start(); else if (keyWatcher.IsRunning) keyWatcher.Stop();
+        // 「上の中央」のときは、組み合わせの文字をキーボードの下に出す (キーボードの位置を動かさないため)
+        bool textBelow = s.KeyboardPlace == 4;
         var canvas = model.Video.Canvas;
         if (s.KeyboardOn && canvas != null)
         {
-            string key = $"{canvas} {s.KeyboardSize} {s.KeyboardPlace} {jis}";
+            string key = $"{canvas} {s.KeyboardSize} {s.KeyboardPlace} {jis} {pressed.Signature}";
             if (key != keyboardCanvasKey)
             {
                 keyboardCanvasKey = key;
-                var bmp = KeyboardRenderer.Render(canvas.Width * s.KeyboardSize, jis);
+                var bmp = KeyboardRenderer.Render(canvas.Width * s.KeyboardSize, jis, pressed, textBelow);
                 if (bmp == null) model.Video.SetLayer(LayerKind.Keyboard, null);
                 else
                 {
@@ -185,11 +198,11 @@ public sealed partial class OverlayController : IDisposable
         bool covered = model.Outputs.FullDisplay != null && model.Outputs.FullDisplay.Name == d?.Name;
         if (s.KeyboardOn && d != null && !covered)
         {
-            string key = $"{d} {s.KeyboardSize} {s.KeyboardPlace} {jis} {s.OverlayCorner} {s.OverlayScale}";
+            string key = $"{d} {s.KeyboardSize} {s.KeyboardPlace} {jis} {s.OverlayCorner} {s.OverlayScale} {pressed.Signature}";
             if (key != keyboardWindowKey || !keyboardWindow.IsVisible)
             {
                 keyboardWindowKey = key;
-                var bmp = KeyboardRenderer.Render(d.Width * s.KeyboardSize, jis);
+                var bmp = KeyboardRenderer.Render(d.Width * s.KeyboardSize, jis, pressed, textBelow);
                 if (bmp == null) { keyboardWindow.Hide(); return; }
                 // ワイプは画面の幅に対して「大きさ」の幅で隅に置いている
                 bool right = s.OverlayCorner is 0 or 2;
@@ -377,6 +390,7 @@ public sealed partial class OverlayController : IDisposable
         annotations.Close();
         boardWindow.Close();
         keyboardWindow.Close();
+        keyWatcher.Dispose();
         pointerSurface.Dispose();
     }
 

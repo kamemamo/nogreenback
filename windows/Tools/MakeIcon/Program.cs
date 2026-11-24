@@ -2,6 +2,7 @@
 //   dotnet run --project windows/Tools/MakeIcon
 // Mac のアイコンは周りに透明な余白 (1024 のうち 100) があり、Windows ではタスクバーで小さく見えるので、
 // 角の丸い四角のまわりを少しだけ残して切り出す。大きさごとに PNG で入れる (Windows Vista 以降はすべての大きさで PNG を読める)。
+// Microsoft Store 用の MSIX のタイルの画像 (windows/Packaging/Images) も、同じ切り出し方で作る。
 
 using System.IO;
 using System.Windows;
@@ -22,8 +23,8 @@ source.EndInit();
 // 1024 のうち、四角は 100〜924。まわりを 16 だけ残して 84〜940 を使う
 var crop = new CroppedBitmap(source, new Int32Rect(84, 84, 856, 856));
 
-var images = new List<byte[]>();
-foreach (int size in sizes)
+// 切り出した絵を size × size の PNG にする
+byte[] Png(int size)
 {
     var visual = new DrawingVisual();
     RenderOptions.SetBitmapScalingMode(visual, BitmapScalingMode.HighQuality);
@@ -34,8 +35,10 @@ foreach (int size in sizes)
     encoder.Frames.Add(BitmapFrame.Create(bmp));
     using var ms = new MemoryStream();
     encoder.Save(ms);
-    images.Add(ms.ToArray());
+    return ms.ToArray();
 }
+
+var images = sizes.Select(Png).ToList();
 
 // ICO: ヘッダー (6 バイト) + 画像ごとの目録 (16 バイト) + 画像 (PNG)
 using (var fs = File.Create(output))
@@ -56,6 +59,13 @@ using (var w = new BinaryWriter(fs))
     foreach (var img in images) w.Write(img);
 }
 Console.WriteLine($"{output} ({string.Join(", ", sizes)} px, {new FileInfo(output).Length:N0} バイト)");
+
+// MSIX のタイルの画像 (AppxManifest.xml から指している名前と大きさ)
+string tiles = Path.Combine(root, "windows", "Packaging", "Images");
+Directory.CreateDirectory(tiles);
+foreach (var (name, size) in new[] { ("Square44x44Logo", 44), ("Square150x150Logo", 150), ("StoreLogo", 50) })
+    File.WriteAllBytes(Path.Combine(tiles, name + ".png"), Png(size));
+Console.WriteLine($"{tiles} (44, 150, 50 px)");
 
 static string FindRoot()
 {

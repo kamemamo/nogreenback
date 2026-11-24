@@ -253,6 +253,9 @@ public sealed class AppState : Observable
     public bool PointerOn { get => pointerOn; set => Set(ref pointerOn, value); }
     bool recording;
     public bool Recording { get => recording; set => Set(ref recording, value); }
+    /// キーボードの上に、押したキーの組み合わせの文字を出しているか (字幕をその上に出すため)
+    bool keyTextShown;
+    public bool KeyTextShown { get => keyTextShown; set => Set(ref keyTextShown, value); }
 
     string fpsText = "";
     public string FpsText { get => fpsText; set => Set(ref fpsText, value); }
