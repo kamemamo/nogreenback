@@ -150,14 +150,21 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
         get { previewLock.lock(); defer { previewLock.unlock() }; return _keyboard }
         set { previewLock.lock(); _keyboard = newValue; previewLock.unlock() }
     }
+    /// 押しているキー (キーボードの絵で光らせる) と、組み合わせの文字
+    private var _keyPress = KeyboardRenderer.Pressed()
+    var keyPress: KeyboardRenderer.Pressed {
+        get { previewLock.lock(); defer { previewLock.unlock() }; return _keyPress }
+        set { previewLock.lock(); _keyPress = newValue; previewLock.unlock() }
+    }
     /// キーボードの画像 (映像の大きさと設定が同じあいだは作り直さない)
     /// person は人物の左右の範囲 (「人物の反対側」のとき、すき間の真ん中に置くため)
     private func keyboardImage(extent: CGRect, person: ClosedRange<CGFloat>) -> CIImage? {
         guard let k = keyboard else { return nil }
-        let key = "\(Int(extent.width))x\(Int(extent.height)) \(k.scale) \(k.position.rawValue) \(Int(person.lowerBound))-\(Int(person.upperBound)) \(KeyboardRenderer.layout.rawValue)"
+        let pressed = keyPress
+        let key = "\(Int(extent.width))x\(Int(extent.height)) \(k.scale) \(k.position.rawValue) \(Int(person.lowerBound))-\(Int(person.upperBound)) \(KeyboardRenderer.layout.rawValue) \(pressed.signature)"
         if keyboardCache?.key != key {
             keyboardCache = (key, KeyboardRenderer.ciImage(extent: extent, scale: k.scale, position: k.position,
-                                                           person: person))
+                                                           person: person, pressed: pressed))
         }
         return keyboardCache?.image
     }
@@ -1084,6 +1091,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     // キーの説明用のキーボード
     var keyboardButton = NSButton()
     lazy var keyboardWindow = KeyboardWindow()
+    /// 実際に押したキーを見る (キーボードを出している間だけ)
+    let keyWatcher = KeyPressWatcher()
+    /// 「入力監視」の許可を、この起動で一度求めたか
+    var keyAccessAsked = false
     var keyboardOn: Bool {
         get { UserDefaults.standard.bool(forKey: "keyboardOn") }
         set { UserDefaults.standard.set(newValue, forKey: "keyboardOn") }
@@ -2545,17 +2556,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     /// 映像 (プレビュー・全画面出力・Syphon) と、全画面出力に隠れていなければ画面にも出す
     func updateKeyboard() {
         processor.keyboard = keyboardOn ? (keyboardScale, keyboardPosition) : nil
-        let covered = outputWindow != nil && outputScreen == overlayScreen
-        if keyboardOn && !covered {
-            // 画面に重ねる人物は、画面の幅に対して overlayScale の幅で隅に置いている
-            let right = overlayCorner == .bottomRight || overlayCorner == .topRight
-            let s = CGFloat(overlayScale)
-            keyboardWindow.show(on: overlayScreen, scale: keyboardScale, position: keyboardPosition,
-                                person: right ? (1 - s)...1 : 0...s)
-        } else {
-            keyboardWindow.orderOut(nil)
-        }
+        if keyboardOn { startKeyWatcher() } else { keyWatcher.stop() }
+        if !showKeyboardWindow() { keyboardWindow.orderOut(nil) }
         updateRecordedWindows()
+    }
+
+    /// 画面にキーボードを出す (全画面出力に隠れているときや、キーボードを出さないときは false)
+    @discardableResult
+    func showKeyboardWindow() -> Bool {
+        let covered = outputWindow != nil && outputScreen == overlayScreen
+        guard keyboardOn && !covered else { return false }
+        // 画面に重ねる人物は、画面の幅に対して overlayScale の幅で隅に置いている
+        let right = overlayCorner == .bottomRight || overlayCorner == .topRight
+        let s = CGFloat(overlayScale)
+        keyboardWindow.show(on: overlayScreen, scale: keyboardScale, position: keyboardPosition,
+                            person: right ? (1 - s)...1 : 0...s, pressed: processor.keyPress)
+        return true
+    }
+
+    /// 押したキーを見始める。「入力監視」の許可がなければ、この起動で一度だけ求める
+    /// (許可がなくても、キーボードの絵はいつもどおり出す)
+    func startKeyWatcher() {
+        guard !keyWatcher.isRunning else { return }
+        keyWatcher.onChange = { [weak self] pressed in
+            guard let self else { return }
+            self.processor.keyPress = pressed
+            if self.keyboardWindow.isVisible { self.showKeyboardWindow() }
+        }
+        if keyWatcher.start() || keyAccessAsked { return }
+        keyAccessAsked = true
+        // 初めてのときは Mac が許可を求める画面を出す。2 回目からは出ないので、こちらから知らせる
+        let first = !UserDefaults.standard.bool(forKey: "askedInputMonitoring")
+        UserDefaults.standard.set(true, forKey: "askedInputMonitoring")
+        KeyPressWatcher.requestAccess()
+        if !first {
+            showAlert(L("押したキーをキーボードの絵で光らせるには、「システム設定 > プライバシーとセキュリティ > 入力監視」で NoGreenBack を許可し、アプリを開き直してください。"))
+        }
     }
     @objc func keyboardToggled(_ sender: NSButton) {
         keyboardOn = sender.state == .on

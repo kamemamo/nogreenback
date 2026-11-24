@@ -209,3 +209,4 @@
 "AI で聞き間違いを直す (Apple Intelligence)" = "Fix mishearings with AI (Apple Intelligence)";
 "この画面を録画しています。押すと録画を止めます (%@R)" = "This screen is being recorded. Press to stop recording (%@R)";
 "iPhone・iPad の画面: %@" = "iPhone/iPad screen: %@";
+"押したキーをキーボードの絵で光らせるには、「システム設定 > プライバシーとセキュリティ > 入力監視」で NoGreenBack を許可し、アプリを開き直してください。" = "To light up the keys you press on the keyboard, allow NoGreenBack in System Settings > Privacy & Security > Input Monitoring, then reopen the app.";

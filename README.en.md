@@ -104,6 +104,7 @@ When explaining shortcuts (for Blender, for example), show a keyboard and circle
 
 - **JIS or US layout** with a numeric keypad (Sidebar > Keyboard > Layout). Where Mac and Windows key names differ, both are shown (white for Mac, light blue for Windows, e.g. ⌘ command / Alt).
 - Shift characters are shown on the number and symbol keys.
+- **The keys you actually press light up.** A key turns orange while you hold it and for a second after you let go, and the combination you pressed, such as "⌘ command + C", appears in large text above the keyboard (it disappears 3 seconds after you let go, and appears below the keyboard when it's at the top center). Keys typed in other apps light up too, so the first time, allow NoGreenBack in System Settings > Privacy & Security > Input Monitoring and reopen the app (without it, the keyboard is still shown as usual). Nothing lights up while you type in a password field, because macOS doesn't pass those keys on.
 - Toggle with **Keyboard** or ⌃⌥⌘ B. It goes into the composited video (preview, full-screen output, and Syphon with a background), so you can show it over another computer's screen brought in through an ATEM. When the full-screen output isn't covering the display screen, it's also shown directly on screen (and recorded).
 - By default it sits in the gap between the person and the edge of the screen ("Opposite the person"). You can also choose bottom center, bottom left, bottom right or top center, and the size.
 
