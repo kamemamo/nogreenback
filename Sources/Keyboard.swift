@@ -112,15 +112,25 @@ enum KeyboardRenderer {
         return keys
     }
 
-    /// 横幅 width ピクセルのキーボードの画像
-    static func image(width pixelWidth: CGFloat) -> CGImage? {
-        let pad: CGFloat = 0.2
+    /// 横幅 width ピクセルのキーボードの画像。
+    /// pressed のキーを光らせ、組み合わせの文字があればキーボードの上 (textBelow なら下) に出す。
+    /// キーボード全体は大きさと配列ごとに一度だけ描いて取っておき、キーを押したときは
+    /// 光るキーと文字だけをその上に描く (速く打っても描き直しが軽く済むように)
+    static func image(width pixelWidth: CGFloat, pressed: Pressed = Pressed(), textBelow: Bool = false) -> CGImage? {
         let unit = (pixelWidth / (width + pad * 2)).rounded(.down)
         guard unit >= 4 else { return nil }
-        let w = Int(((width + pad * 2) * unit).rounded()), h = Int(((height + pad * 2) * unit).rounded())
-        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
-                                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        let w = Int(((width + pad * 2) * unit).rounded()), kbH = Int(((height + pad * 2) * unit).rounded())
+        guard let base = baseImage(unit: unit, width: w, height: kbH) else { return nil }
+        // 光らせるキー (絵の何番目か)
+        let lit = Set(pressed.codes.compactMap { index(of: $0) })
+        if lit.isEmpty && pressed.text == nil { return base }
+
+        // 組み合わせの文字を出す帯 (文字がないときは作らない)
+        let band = pressed.text == nil ? 0 : Int((unit * 1.25).rounded())
+        let h = kbH + band
+        guard let ctx = context(width: w, height: h) else { return nil }
+        // 取っておいたキーボードを置く (ここはまだ左下原点。文字が上ならキーボードは下に)
+        ctx.draw(base, in: CGRect(x: 0, y: textBelow ? band : 0, width: w, height: kbH))
         // 上から下へ並べたいので、左上を原点にする
         ctx.translateBy(x: 0, y: CGFloat(h))
         ctx.scaleBy(x: 1, y: -1)
@@ -129,20 +139,81 @@ enum KeyboardRenderer {
         NSGraphicsContext.current = gc
         defer { NSGraphicsContext.restoreGraphicsState() }
 
-        // 下地
-        let base = NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: CGFloat(w), height: CGFloat(h)),
-                                xRadius: unit * 0.3, yRadius: unit * 0.3)
-        NSColor(white: 0.08, alpha: 0.78).setFill()
-        base.fill()
+        // 組み合わせの文字 (「⌘ command + C」など)
+        if let s = pressed.text {
+            let pillH = unit * 0.95
+            var font = NSFont.systemFont(ofSize: unit * 0.55, weight: .bold)
+            var size = (s as NSString).size(withAttributes: [.font: font])
+            let maxW = CGFloat(w) - unit * 0.8
+            if size.width > maxW {
+                font = font.withSize(font.pointSize * maxW / size.width)
+                size = (s as NSString).size(withAttributes: [.font: font])
+            }
+            let pillW = size.width + unit * 0.8
+            let y = textBelow ? CGFloat(kbH) + unit * 0.15 : CGFloat(band) - pillH - unit * 0.15
+            let pill = NSRect(x: (CGFloat(w) - pillW) / 2, y: y, width: pillW, height: pillH)
+            NSColor(white: 0.08, alpha: 0.85).setFill()
+            NSBezierPath(roundedRect: pill, xRadius: unit * 0.25, yRadius: unit * 0.25).fill()
+            (s as NSString).draw(at: NSPoint(x: pill.midX - size.width / 2, y: pill.midY - size.height / 2),
+                                 withAttributes: [.font: font, .foregroundColor: NSColor.white])
+        }
+        // 光るキーだけを上から描く (文字が上にあるときは、その分下げる)
+        if !textBelow { ctx.translateBy(x: 0, y: CGFloat(band)) }
+        drawKeys(unit: unit, only: lit)
+        return ctx.makeImage()
+    }
 
+    /// キーボードの周りの余白 (単位)
+    private static let pad: CGFloat = 0.2
+
+    /// 取っておいたキーボード全体の画像 (大きさと配列ごと。映像の処理からも使うので鍵をかける)
+    private static let baseLock = NSLock()
+    nonisolated(unsafe) private static var bases: [String: CGImage] = [:]
+
+    private static func baseImage(unit: CGFloat, width w: Int, height h: Int) -> CGImage? {
+        let key = "\(w)x\(h) \(unit) \(layout.rawValue)"
+        baseLock.lock()
+        if let image = bases[key] { baseLock.unlock(); return image }
+        baseLock.unlock()
+        guard let ctx = context(width: w, height: h) else { return nil }
+        ctx.translateBy(x: 0, y: CGFloat(h))
+        ctx.scaleBy(x: 1, y: -1)
+        let gc = NSGraphicsContext(cgContext: ctx, flipped: true)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = gc
+        // 下地
+        NSColor(white: 0.08, alpha: 0.78).setFill()
+        NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: CGFloat(w), height: CGFloat(h)),
+                     xRadius: unit * 0.3, yRadius: unit * 0.3).fill()
+        drawKeys(unit: unit, only: nil)
+        NSGraphicsContext.restoreGraphicsState()
+        guard let image = ctx.makeImage() else { return nil }
+        baseLock.lock()
+        // 画面や大きさを何度も変えても増え続けないように
+        if bases.count >= 8 { bases.removeAll() }
+        bases[key] = image
+        baseLock.unlock()
+        return image
+    }
+
+    private static func context(width w: Int, height h: Int) -> CGContext? {
+        CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+    }
+
+    /// キーを描く (左上原点の NSGraphicsContext に)。
+    /// only が nil ならすべてのキーをふだんの色で、そうでなければ only のキーだけを光らせて描く
+    private static func drawKeys(unit: CGFloat, only: Set<Int>?) {
         let gap = unit * 0.1
         let radius = unit * 0.14
         let winColor = NSColor(red: 0.55, green: 0.8, blue: 1, alpha: 1)
-        func drawKey(_ path: NSBezierPath) {
-            NSColor(white: 0.22, alpha: 0.95).setFill()
+        /// lit: 押しているキー (オレンジに光らせ、縁を白く太くする)
+        func drawKey(_ path: NSBezierPath, lit: Bool) {
+            (lit ? NSColor(red: 1, green: 0.58, blue: 0.1, alpha: 1) : NSColor(white: 0.22, alpha: 0.95)).setFill()
             path.fill()
-            NSColor(white: 0.45, alpha: 1).setStroke()
-            path.lineWidth = max(1, unit * 0.025)
+            (lit ? NSColor.white : NSColor(white: 0.45, alpha: 1)).setStroke()
+            path.lineWidth = max(1, unit * (lit ? 0.06 : 0.025))
             path.stroke()
         }
         func text(_ s: String, size: CGFloat, color: NSColor = .white, weight: NSFont.Weight = .medium) -> NSAttributedString {
@@ -170,10 +241,10 @@ enum KeyboardRenderer {
                 y += lh
             }
         }
-        func drawLabel(_ key: Key, in r: NSRect) {
+        func drawLabel(_ key: Key, in r: NSRect, lit: Bool) {
             if key.big, let shift = key.shift {
                 // shift の文字を上に、ふだんの文字を下に
-                drawLines([text(shift, size: unit * 0.26, color: NSColor(white: 0.8, alpha: 1)),
+                drawLines([text(shift, size: unit * 0.26, color: NSColor(white: lit ? 1 : 0.8, alpha: 1)),
                            text(key.mac, size: unit * 0.34, weight: .semibold)], in: r)
                 return
             }
@@ -186,19 +257,20 @@ enum KeyboardRenderer {
                 let name = symbols[key.mac].map { "\($0) \(key.mac)" } ?? key.mac
                 lines.append(text(name, size: unit * 0.21))
             }
-            if let win = key.win { lines.append(text(win, size: unit * 0.21, color: winColor)) }
+            if let win = key.win { lines.append(text(win, size: unit * 0.21, color: lit ? .white : winColor)) }
             drawLines(lines, in: r)
         }
 
-        for key in keys {
+        let lit = only != nil
+        for (i, key) in keys.enumerated() where only?.contains(i) ?? true {
             let r = NSRect(x: (pad + key.x) * unit + gap / 2, y: (pad + key.y) * unit + gap / 2,
                            width: key.w * unit - gap, height: key.h * unit - gap)
-            drawKey(NSBezierPath(roundedRect: r, xRadius: radius, yRadius: radius))
-            drawLabel(key, in: r)
+            drawKey(NSBezierPath(roundedRect: r, xRadius: radius, yRadius: radius), lit: lit)
+            drawLabel(key, in: r, lit: lit)
         }
 
         // return (JIS は 2 行にまたがる L 字。US はふつうのキーとして並べてある)
-        guard layout == .jis else { return ctx.makeImage() }
+        guard layout == .jis, only?.contains(jisReturn) ?? true else { return }
         let top = (pad + fnRow + 1) * unit + gap / 2
         let right = (pad + mainWidth) * unit - gap / 2
         let upperLeft = (pad + 13.5) * unit + gap / 2
@@ -213,10 +285,9 @@ enum KeyboardRenderer {
         ret.line(to: NSPoint(x: lowerLeft, y: mid))
         ret.line(to: NSPoint(x: upperLeft, y: mid))
         ret.close()
-        drawKey(ret)
+        drawKey(ret, lit: lit)
         drawLabel(Key(mac: "return", win: "Enter", x: 0, y: 0),
-                  in: NSRect(x: lowerLeft, y: top, width: right - lowerLeft, height: bottom - top))
-        return ctx.makeImage()
+                  in: NSRect(x: lowerLeft, y: top, width: right - lowerLeft, height: bottom - top), lit: lit)
     }
 
     /// 置く場所
@@ -261,8 +332,10 @@ enum KeyboardRenderer {
 
     /// 映像 (extent) に重ねるキーボード。scale は映像の横幅に対する割合
     static func ciImage(extent: CGRect, scale: Double, position: Position,
-                        person: ClosedRange<CGFloat>? = nil) -> CIImage? {
-        guard let cg = image(width: extent.width * CGFloat(scale)) else { return nil }
+                        person: ClosedRange<CGFloat>? = nil, pressed: Pressed = Pressed()) -> CIImage? {
+        // 上の中央に置くときは、組み合わせの文字をキーボードの下に出す (キーボードの位置を動かさないため)
+        guard let cg = image(width: extent.width * CGFloat(scale), pressed: pressed,
+                             textBelow: position == .top) else { return nil }
         let img = CIImage(cgImage: cg)
         let f = frame(size: img.extent.size, in: extent, position: position, person: person)
         return img.transformed(by: CGAffineTransform(translationX: f.minX, y: f.minY))
@@ -297,12 +370,13 @@ final class KeyboardWindow: NSPanel {
 
     /// person は人物の左右の範囲 (画面の幅に対する割合)
     func show(on screen: NSScreen?, scale: Double, position: KeyboardRenderer.Position,
-              person: ClosedRange<CGFloat>? = nil) {
+              person: ClosedRange<CGFloat>? = nil, pressed: KeyboardRenderer.Pressed = .init()) {
         guard let screen else { orderOut(nil); return }
         let sf = screen.frame
         let bs = screen.backingScaleFactor
-        let key = "\(sf.width)x\(sf.height)@\(bs) \(scale) \(KeyboardRenderer.layout.rawValue)"
-        if key != cacheKey, let cg = KeyboardRenderer.image(width: sf.width * CGFloat(scale) * bs) {
+        let key = "\(sf.width)x\(sf.height)@\(bs) \(scale) \(KeyboardRenderer.layout.rawValue) \(position.rawValue) \(pressed.signature)"
+        if key != cacheKey, let cg = KeyboardRenderer.image(width: sf.width * CGFloat(scale) * bs, pressed: pressed,
+                                                            textBelow: position == .top) {
             cacheKey = key
             imageView.image = NSImage(cgImage: cg, size: NSSize(width: CGFloat(cg.width) / bs,
                                                                height: CGFloat(cg.height) / bs))

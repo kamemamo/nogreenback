@@ -20,7 +20,7 @@ NoGreenBack は、Mac 版と Windows 版を 1 つのリポジトリ（GitHub の
 |---|---|---|
 | `main` | リリースする版。いつでも出せる状態にしておく | Mac 側・Windows 側の両方 |
 | `develop` | 次に出す版をまとめる所。いつも `main` と同じか、少し先 | Mac 側（Windows の変更が入ったら追いつかせる） |
-| `feature/…` | Mac 版の作業場所（今は `feature/smart-subtitles`） | Mac 側 |
+| `feature/…` | Mac 版の作業場所（今は `feature/mac`） | Mac 側 |
 | `windows` | Windows 版の作業場所 | Windows 側 |
 
 大事な決まりが 3 つあります。
@@ -38,7 +38,7 @@ NoGreenBack は、Mac 版と Windows 版を 1 つのリポジトリ（GitHub の
 5. 「マージしてプッシュ」で、`develop` → `main` の順に早送りでマージして、3 つともプッシュします。
 
 ```bash
-git push origin feature/smart-subtitles:develop feature/smart-subtitles:main
+git push origin feature/mac:develop feature/mac:main
 ```
 
 **`main` が先に進んでいたとき**（Windows のプルリクエストが入った後など）は早送りできません。そのときは次のどちらかにします。
