@@ -5,6 +5,8 @@
 // (AVAssetWriter は .mp4 だと区切りの書き込みが途中で止まるため、録画中は .mov を使う)
 // 圧縮は Apple Silicon のメディアエンジン (専用回路) が行うので、CPU の負担は小さい。
 // 画面に重ねた人物と手書きの注釈もそのまま録画される (NoGreenBack の操作ウィンドウだけは除く)
+// 「録画する画面」で「合成した映像」を選んだときは、画面ではなく、プレビューと同じ合成した映像
+// (背景・人物・キーボードなど) を、映像処理から直接受け取って録画する (startCanvas / appendCanvas)
 
 import AppKit
 import AVFoundation
@@ -99,6 +101,83 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
         config.showsCursor = true
         config.queueDepth = 6
 
+        let audioSession = try await openWriter(width: width, height: height, microphone: microphone,
+                                                 external: external, settings: settings, canvas: false)
+
+        let stream = SCStream(filter: filter, configuration: config, delegate: self)
+        try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
+        try await stream.startCapture()
+        self.stream = stream
+        // 画面とマイクはどちらもホスト時刻で時刻が付くので、同じ時間軸に並べられる
+        startAudio(audioSession, mixing: microphone != nil, external: external)
+        return self.url!
+    }
+
+    // MARK: 合成した映像の録画
+
+    /// 合成した映像を書き込むときの、画素の受け渡し口 (画面を録るときは nil)
+    private var adaptor: AVAssetWriterInputPixelBufferAdaptor?
+    /// 合成した映像を書き込む大きさ
+    private var canvasSize = CGSize.zero
+    /// 最後に書き込んだ合成した映像の時刻 (フレームレートの上限を守るため。映像処理のキューだけで使う)
+    private var lastCanvasTime = CMTime.invalid
+    private var minCanvasInterval = 1.0 / 30
+    /// 止め始めたら、もう書き込まない (書き込みを閉じたあとに足すと落ちるため。queue の上だけで使う)
+    private var finishing = false
+
+    /// 合成した映像 (プレビューや全画面出力と同じ、背景・人物・キーボードなどを重ねたもの) を、
+    /// 画面を通さずにそのまま録画する。画面収録の許可は要らない。コマは appendCanvas で渡す
+    /// - Parameter size: 合成した映像の大きさ (この比率のまま、長辺を設定の値以下に縮める)
+    func startCanvas(size: CGSize, microphone: AVCaptureDevice?, external: ExternalAudio? = nil,
+                     settings: RecordSettings) async throws -> URL {
+        let longSide = max(size.width, size.height, 1)
+        let scale = settings.maxLongSide > 0 ? min(1, Double(settings.maxLongSide) / longSide) : 1
+        let width = max(2, Int(size.width * scale) / 2 * 2)
+        let height = max(2, Int(size.height * scale) / 2 * 2)
+        canvasSize = CGSize(width: width, height: height)
+        minCanvasInterval = 1.0 / Double(max(1, settings.fps))
+        lastCanvasTime = .invalid
+        let audioSession = try await openWriter(width: width, height: height, microphone: microphone,
+                                                 external: external, settings: settings, canvas: true)
+        startAudio(audioSession, mixing: microphone != nil, external: external)
+        return self.url!
+    }
+
+    /// 合成した映像の 1 コマを書き込む (映像処理のキューから呼ぶ。描き終わるのは待たない)
+    func appendCanvas(_ image: CIImage, context: CIContext) {
+        guard let adaptor, let pool = adaptor.pixelBufferPool else { return }
+        let now = CMClockGetTime(CMClockGetHostTimeClock())
+        // 設定のフレームレートより速く来たコマは飛ばす (少し早めでも受け入れて、間引きすぎないように)
+        if lastCanvasTime.isValid, CMTimeGetSeconds(CMTimeSubtract(now, lastCanvasTime)) < minCanvasInterval * 0.8 { return }
+        var out: CVPixelBuffer?
+        guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &out) == kCVReturnSuccess, let pb = out else { return }
+        lastCanvasTime = now
+        // 大きさや比率が録画の途中で変わっても、切らずに全部入るように縮めて真ん中に置く (余りは黒)
+        let e = image.extent, size = canvasSize
+        guard e.width > 0, e.height > 0 else { return }
+        let s = min(size.width / e.width, size.height / e.height)
+        let fitted = image.transformed(by: CGAffineTransform(scaleX: s, y: s)
+            .concatenating(CGAffineTransform(translationX: (size.width - e.width * s) / 2 - e.minX * s,
+                                             y: (size.height - e.height * s) / 2 - e.minY * s)))
+        let frame = fitted.composited(over: CIImage(color: .black)).cropped(to: CGRect(origin: .zero, size: size))
+        let dest = CIRenderDestination(pixelBuffer: pb)
+        dest.colorSpace = CGColorSpace(name: CGColorSpace.sRGB)
+        guard let task = try? context.startTask(toRender: frame, to: dest) else { return }
+        queue.async { [self] in
+            _ = try? task.waitUntilCompleted()
+            guard !finishing, let writer, let videoInput, writer.status == .writing else { return }
+            if !started {
+                writer.startSession(atSourceTime: now)
+                started = true
+            }
+            if videoInput.isReadyForMoreMediaData { adaptor.append(pb, withPresentationTime: now) }
+        }
+    }
+
+    /// 書き出すファイルと、映像・音声の入り口を用意して書き込みを始める。録るマイクがあれば、その取り込みを返す
+    /// - Parameter canvas: true なら合成した映像 (画素) を受け取る口も作る。false なら画面の映像をそのまま受け取る
+    private func openWriter(width: Int, height: Int, microphone: AVCaptureDevice?, external: ExternalAudio?,
+                            settings: RecordSettings, canvas: Bool) async throws -> AVCaptureSession? {
         // 書き出し先: ムービーフォルダ
         let movies = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0]
         let stamp = DateFormatter()
@@ -161,7 +240,15 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
                 audioSession = session
             }
         }
-
+        if canvas {
+            adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: video, sourcePixelBufferAttributes: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferWidthKey as String: width,
+                kCVPixelBufferHeightKey as String: height,
+                kCVPixelBufferMetalCompatibilityKey as String: true,
+                kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any](),
+            ])
+        }
         guard writer.startWriting() else {
             throw RecorderError.message(L("録画ファイルを作れません: %@", writer.error?.localizedDescription ?? ""))
         }
@@ -169,17 +256,15 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
         self.videoInput = video
         self.url = url
         self.started = false
+        return audioSession
+    }
 
-        let stream = SCStream(filter: filter, configuration: config, delegate: self)
-        try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
-        try await stream.startCapture()
-        self.stream = stream
-        // 画面とマイクはどちらもホスト時刻で時刻が付くので、同じ時間軸に並べられる
+    /// マイクと外部の音声を録り始める
+    private func startAudio(_ audioSession: AVCaptureSession?, mixing: Bool, external: ExternalAudio?) {
         audioSession?.startRunning()
         self.audioSession = audioSession
         // 外部の音声: マイクがあれば混ぜるためにためておき、なければそのまま録る
         if let external {
-            let mixing = microphone != nil
             mixesExternal = mixing
             fifoLock.withLock { fifo.removeAll() }
             external.tap = { [weak self] sb in
@@ -188,7 +273,6 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
             }
             self.external = external
         }
-        return url
     }
 
     /// 録画を止めてファイルを閉じる。書き出したファイルの場所を返す
@@ -201,6 +285,7 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate,
         external?.tap = nil
         external = nil
         let writer: AVAssetWriter? = queue.sync {
+            finishing = true
             videoInput?.markAsFinished()
             audioInput?.markAsFinished()
             return self.writer

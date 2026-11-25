@@ -81,7 +81,8 @@ Use your iPhone as usual while its screen sits behind you, with the person in fr
 1. Connect the iPhone (or iPad) to the Mac with a USB cable. The first time, tap "Trust" when the iPhone asks whether to trust this computer.
 2. In "Background", choose "iPhone/iPad screen: …" (it takes a few seconds to show up after connecting).
 3. The tall iPhone screen goes in the middle, with black on both sides. The person goes in a corner by "Position" and "Size", so pick a position and size that don't cover the iPhone screen.
-4. Turn on Full Screen, set "Screen to record" to the output screen, and record.
+4. Set "Screen to record" to "Composited video (same as preview)" and record. The same video as the preview, with the person over the iPhone screen, is saved as is (you don't need Full Screen to cover the Mac's screen).
+   - The video's shape follows "Aspect ratio" in the sidebar ("Same as camera" gives 16:9, "Match output screen" matches the output screen).
 
 - Turn the iPhone sideways for a wide screen.
 - The item named "…'s Camera" is the iPhone's camera (Continuity Camera). To show the screen, choose "iPhone/iPad screen".
@@ -120,6 +121,7 @@ Turn on **Pointer** (⌃⌥⌘ L) to point at the mouse position with a pointer 
 **● Record** records the "Screen to record" and saves `NGB date time.mp4` to your Movies folder.
 
 - The overlaid person and drawings are recorded; the NoGreenBack control window isn't.
+- Choose "Composited video (same as preview)" at the bottom of "Screen to record" to record the same video as the preview (background, person, whiteboard, keyboard, pointer stick) directly instead of a screen. You can record a video with the iPhone screen as the background without covering the Mac's screen. In this mode, Screen Recording permission isn't needed and the control window stays where it is. Subtitles are saved separately as a .srt file; the mouse pointer and drawings outside the full-screen output aren't included.
 - A small "■ Stop Recording" button with the elapsed time appears at the top right of the screen being recorded, so you can tell which screen is recorded (it isn't recorded itself). Stop with it or ⌃⌥⌘ R.
 - When recording the same screen as the control window, the window goes to the Dock while recording and comes back when you stop.
 - Like OBS's Hybrid MP4, recordings survive crashes and power loss: the app writes `.mov` fragments every 2 seconds and converts to `.mp4` without re-encoding when you stop.

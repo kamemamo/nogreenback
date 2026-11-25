@@ -86,7 +86,7 @@
 "出す画面に合わせる" = "Match output screen";
 "カメラと同じ" = "Same as camera";
 "背景と人物を合成した映像の横縦比。「出す画面に合わせる」なら、プロジェクターや外部モニターに全画面で出したときに上下や左右が黒くなりません" = "Aspect ratio of the composited video. \"Match output screen\" avoids black bars on a projector or external monitor";
-"「● 録画開始」で録画する画面" = "The screen recorded by \"● Record\"";
+"「● 録画開始」で録画する画面。「合成した映像」なら、画面ではなく、プレビューと同じ映像（背景・人物・キーボードなど）をそのまま録画します" = "The screen recorded by \"● Record\". \"Composited video\" records the same video as the preview (background, person, keyboard and so on) directly, instead of a screen";
 "映像の平均ビットレート。上げるほど文字や動きがきれいになり、ファイルが大きくなります" = "Average video bitrate. Higher makes text and motion cleaner and files larger";
 "縮めない" = "Original";
 "録画の長辺のピクセル数 (画面のほうが小さいときは画面のまま)。1920 で 1080p 相当" = "Pixels on the long side of the recording (kept as is if the screen is smaller). 1920 is about 1080p";
@@ -140,6 +140,7 @@
 "カメラが見つかりません。カメラをつなぐと、自動で映ります。" = "No camera found. Connect a camera and it will show up automatically.";
 "カメラを開けません: %@" = "Can't open the camera: %@";
 "表示する画面と同じ" = "Same as display screen";
+"合成した映像（プレビューと同じ）" = "Composited video (same as preview)";
 "なし（透明）" = "None (transparent)";
 "画面: %@" = "Screen: %@";
 "画面を背景にできません: %@\n\n初回は「システム設定 > プライバシーとセキュリティ > 画面収録」で NoGreenBack を許可し、アプリを開き直してください。" = "Can't use the screen as the background: %@\n\nThe first time, allow NoGreenBack in System Settings > Privacy & Security > Screen Recording, then reopen the app.";
@@ -178,6 +179,7 @@
 "保存中…" = "Saving…";
 "画面に変化がなかったため、録画は保存されませんでした。" = "Nothing changed on screen, so the recording wasn't saved.";
 "マイクの音が届いていなかったため、録画には音が入っていません。\n「マイク」の選択と、右のメーターが動くかを確かめてください。" = "No microphone audio arrived, so the recording has no sound.\nCheck the \"Microphone\" choice and whether the meter next to it moves.";
+"録画を開始できません: %@" = "Can't start recording: %@";
 "録画を開始できません: %@\n\n初回は「システム設定 > プライバシーとセキュリティ > 画面収録」で NoGreenBack を許可し、アプリを開き直してください。" = "Can't start recording: %@\n\nThe first time, allow NoGreenBack in System Settings > Privacy & Security > Screen Recording, then reopen the app.";
 "よく間違える言葉を「間違い → 正しい」と 1 行ずつ書くと、字幕と字幕ファイルで置き換えます (例: ジオメトリー濃度 → ジオメトリーノード、ブレンダー → Blender)。→ は -> や = でも書けます。書いた内容は自動で残ります。ほかの Mac や別の話題用に、ファイルに保存・読み込みもできます" = "Write often-misheard words one per line as \"wrong → right\" and they're replaced in subtitles and subtitle files (e.g. geometry notes → Geometry Nodes, blender → Blender). You can also use -> or = instead of →. Your list is saved automatically. You can also save and load it as a file for other Macs or topics";
 "読み込む…" = "Load…";

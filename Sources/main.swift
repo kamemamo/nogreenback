@@ -190,6 +190,14 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
     }
     /// 人物の後ろに敷く映像 (USB キャプチャーなど)
     let background = BackgroundSource()
+    /// 合成した映像を録画している録画機 (「録画する画面」が「合成した映像」のときだけ。ScreenRecorder)
+    private var _canvasRecorder: AnyObject?
+    var canvasRecorder: AnyObject? {
+        get { previewLock.lock(); defer { previewLock.unlock() }; return _canvasRecorder }
+        set { previewLock.lock(); _canvasRecorder = newValue; previewLock.unlock() }
+    }
+    /// 今の合成した映像の大きさ (まだ一度も合成していなければ nil)
+    var canvasSize: CGSize? { latestImage?.extent.size }
 
     init(device: MTLDevice, settings: Settings) {
         self.device = device
@@ -482,6 +490,12 @@ final class Processor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @
                 display = stick.composited(over: display).cropped(to: canvas)
                 if background.latestImage != nil { source = display }
             }
+        }
+
+        // 「合成した映像」を録画しているときは、ここまでの映像を録画に渡す。
+        // 字幕は画面の録画と同じく焼き込まない (字幕は .srt と字幕トラックで別に残す)
+        if #available(macOS 12.3, *), let rec = canvasRecorder as? ScreenRecorder {
+            rec.appendCanvas(display, context: ciContext)
         }
 
         // 字幕を下に重ねる (プレビュー・全画面出力・Syphon のすべて)。
@@ -1307,6 +1321,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         get { UserDefaults.standard.string(forKey: "recordScreen") }
         set { UserDefaults.standard.set(newValue, forKey: "recordScreen") }
     }
+    /// true なら画面ではなく、合成した映像 (プレビューと同じ、背景・人物などを重ねたもの) をそのまま録画する
+    var recordCanvas: Bool {
+        get { UserDefaults.standard.bool(forKey: "recordCanvas") }
+        set { UserDefaults.standard.set(newValue, forKey: "recordCanvas") }
+    }
     var outputScreenName: String? {
         get { UserDefaults.standard.string(forKey: "outputScreen") }
         set { UserDefaults.standard.set(newValue, forKey: "outputScreen") }
@@ -1750,7 +1769,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         updateCanvasAspect()
         recordScreenPopup.target = self
         recordScreenPopup.action = #selector(recordScreenChanged(_:))
-        recordScreenPopup.toolTip = L("「● 録画開始」で録画する画面")
+        recordScreenPopup.toolTip = L("「● 録画開始」で録画する画面。「合成した映像」なら、画面ではなく、プレビューと同じ映像（背景・人物・キーボードなど）をそのまま録画します")
         refreshScreens()
 
         // 6 段目: 録画の設定 (数値で選ぶ)
@@ -2226,8 +2245,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     }
 
     @objc func recordScreenChanged(_ sender: NSPopUpButton) {
-        recordScreenName = sender.indexOfSelectedItem > 0 ? sender.titleOfSelectedItem : nil
+        if sender.selectedItem?.tag == Self.canvasItemTag {
+            recordCanvas = true
+        } else {
+            recordCanvas = false
+            recordScreenName = sender.indexOfSelectedItem > 0 ? sender.titleOfSelectedItem : nil
+        }
+        updateDrawableScreens()
     }
+    /// 「録画する画面」の「合成した映像」の項目の目印
+    static let canvasItemTag = 1
 
     func refreshScreens() {
         screenPopup.removeAllItems()
@@ -2239,7 +2266,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         recordScreenPopup.removeAllItems()
         recordScreenPopup.addItem(withTitle: L("表示する画面と同じ"))
         recordScreenPopup.addItems(withTitles: NSScreen.screens.map(\.localizedName))
-        if let name = recordScreenName, NSScreen.screens.contains(where: { $0.localizedName == name }) {
+        recordScreenPopup.menu?.addItem(.separator())
+        let canvasItem = NSMenuItem(title: L("合成した映像（プレビューと同じ）"), action: nil, keyEquivalent: "")
+        canvasItem.tag = Self.canvasItemTag
+        recordScreenPopup.menu?.addItem(canvasItem)
+        if recordCanvas {
+            recordScreenPopup.select(canvasItem)
+        } else if let name = recordScreenName, NSScreen.screens.contains(where: { $0.localizedName == name }) {
             recordScreenPopup.selectItem(withTitle: name)
         } else {
             recordScreenPopup.selectItem(at: 0)
@@ -2359,7 +2392,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         guard let annotation else { return }
         guard outputWindow != nil else { annotation.setAllowedScreens(nil); return }
         var screens = [outputScreen]
-        if recorder != nil, recordScreen != outputScreen { screens.append(recordScreen) }
+        if recorder != nil, !recordCanvas, recordScreen != outputScreen { screens.append(recordScreen) }
         annotation.setAllowedScreens(screens)
     }
 
@@ -3007,6 +3040,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
                 window.makeKeyAndOrderFront(nil)
                 NSApp.activate(ignoringOtherApps: true)
             }
+            processor.canvasRecorder = nil
             Task { @MainActor in
                 let url = await rec.stop(subtitles: cues)
                 self.recorder = nil
@@ -3038,17 +3072,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
             // 操作ウィンドウと同じ画面を録画するとき (モニターが 1 台のときなど) は、
             // 録画中はウィンドウを Dock にしまう。
             // 停止ボタンは録画に映らないよう、録画を始める前に出しておいて対象から外す
-            let hideWindow = window.screen == recordScreen && !window.isMiniaturized
+            // 「合成した映像」を録るときは画面を録らないので、ウィンドウはしまわず、停止ボタンは操作ウィンドウの画面に出す
+            let canvas = recordCanvas
+            let hideWindow = !canvas && window.screen == recordScreen && !window.isMiniaturized
             let panel = RecordingPanel(target: self, action: #selector(recordToggled), restoresWindow: hideWindow)
-            panel.show(on: recordScreen)
+            panel.show(on: canvas ? (window.screen ?? recordScreen) : recordScreen)
             recordingPanel = panel
             Task { @MainActor in
                 do {
-                    _ = try await rec.start(screen: self.recordScreen,
-                                            keeping: self.recordedWindowNumbers,
-                                            microphone: self.selectedMic,
-                                            external: self.recordExternal,
-                                            settings: self.recordSettings)
+                    if canvas {
+                        _ = try await rec.startCanvas(size: self.processor.canvasSize ?? CGSize(width: 1920, height: 1080),
+                                                      microphone: self.selectedMic,
+                                                      external: self.recordExternal,
+                                                      settings: self.recordSettings)
+                        self.processor.canvasRecorder = rec
+                    } else {
+                        _ = try await rec.start(screen: self.recordScreen,
+                                                keeping: self.recordedWindowNumbers,
+                                                microphone: self.selectedMic,
+                                                external: self.recordExternal,
+                                                settings: self.recordSettings)
+                    }
                     rec.duckLevel = self.extDuck
                     rec.externalGain = self.extVolume
                     self.recorder = rec
@@ -3078,7 +3122,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
                 } catch {
                     self.recordingPanel?.orderOut(nil)
                     self.recordingPanel = nil
-                    self.showAlert(L("録画を開始できません: %@\n\n初回は「システム設定 > プライバシーとセキュリティ > 画面収録」で NoGreenBack を許可し、アプリを開き直してください。", error.localizedDescription))
+                    self.showAlert(canvas
+                        ? L("録画を開始できません: %@", error.localizedDescription)
+                        : L("録画を開始できません: %@\n\n初回は「システム設定 > プライバシーとセキュリティ > 画面収録」で NoGreenBack を許可し、アプリを開き直してください。", error.localizedDescription))
                 }
                 self.recordButton.isEnabled = true
             }
